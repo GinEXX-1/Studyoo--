@@ -11,7 +11,8 @@ export function signToken(user) {
 
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const tokenFromHeader = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const token = req.cookies.token || tokenFromHeader;
 
   if (!token) {
     return fail(res, 401, "AUTH_INVALID_TOKEN", "请先登录后再继续。");

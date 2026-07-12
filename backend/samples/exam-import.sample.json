@@ -1,0 +1,24 @@
+{
+  "paper": {
+    "id": "paper-custom-math-2024-sample",
+    "year": 2024,
+    "region": "全国",
+    "subject": "数学",
+    "title": "数学真题结构化导入样例",
+    "source_name": "人工整理样例",
+    "source_url": null,
+    "license_note": "仅用于个人学习和本地开发验证；正式导入需记录清晰来源与使用边界。"
+  },
+  "questions": [
+    {
+      "id": "custom-math-2024-001",
+      "title": "代数恒等变形",
+      "question_number": "1",
+      "question_type": "填空题",
+      "content_text": "已知 $a>0$，且 $a+\\frac{1}{a}=3$，求 $a^2+\\frac{1}{a^2}$。",
+      "official_answer_text": "由 $(a+\\frac{1}{a})^2=a^2+2+\\frac{1}{a^2}=9$，得 $a^2+\\frac{1}{a^2}=7$。",
+      "knowledge_tags": ["基本不等式", "代数恒等变形"],
+      "difficulty": "easy"
+    }
+  ]
+}

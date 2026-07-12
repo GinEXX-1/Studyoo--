@@ -11,7 +11,8 @@ function renderFormula(source, displayMode) {
       })
     };
   } catch {
-    return { __html: source };
+    // 渲染失败时退回纯文本，绝不把原文当 HTML 注入
+    return null;
   }
 }
 
@@ -47,11 +48,15 @@ export function MathText({ text }) {
         if (part.type === "text") {
           return <span key={index}>{part.value}</span>;
         }
+        const rendered = renderFormula(part.value, part.display);
+        if (!rendered) {
+          return <span key={index}>{part.value}</span>;
+        }
         return (
           <span
             key={index}
             className={part.display ? "math-block" : "math-inline"}
-            dangerouslySetInnerHTML={renderFormula(part.value, part.display)}
+            dangerouslySetInnerHTML={rendered}
           />
         );
       })}

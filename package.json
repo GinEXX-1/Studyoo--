@@ -9,6 +9,8 @@
     "dev": "npm run dev --workspace backend",
     "dev:backend": "npm run dev --workspace backend",
     "dev:frontend": "npm run dev --workspace frontend",
+    "check:ai": "npm run check:ai --workspace backend",
+    "smoke:backend": "npm run smoke:minimal --workspace backend",
     "start": "npm run start --workspace backend"
   }
 }

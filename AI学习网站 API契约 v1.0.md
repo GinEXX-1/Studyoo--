@@ -1,5 +1,13 @@
 
-本文档是前后端协作的唯一真相来源。任何接口的新增、修改，必须先改这份文档，再动代码。 Codex、Trae、CodeBuddy 三方均按此文档开发，禁止私自改动接口形状后不同步文档。
+本文档是前后端协作的唯一真相来源。任何接口的新增、修改，必须先改这份文档，再动代码。Codex、Trae、CodeBuddy 三方均按此文档开发，禁止私自改动接口形状后不同步文档。
+
+> **文档分层说明**：
+> - README.md：产品愿景、定位、路线图
+> - 本文档（API契约）：前后端接口唯一真相来源
+> - PROGRESS.md：当前实现状态唯一真相来源
+> 需求变更时，README 与本文档同步更新，以本文档为准。
+
+> **2026-07-05 方向修正**：Studyoo 的第一主轴不是“搜题”，而是“通过真题练习提升自己”。智能答疑/题目解析能力保留，但降级为辅助入口。后续新增功能优先围绕“真题 -> 学生作答 -> AI 评阅 -> 订正复盘 -> 薄弱点更新”展开。
 
 ---
 
@@ -17,15 +25,10 @@
 
 ### 0.2 认证方式
 
-- 除注册/登录接口外，所有接口需在请求头携带：
-
-```
-Authorization: Bearer <token>
-```
-
-- token 由登录接口签发，前端存储在内存或安全存储中，不做本地明文持久化的复杂需求（第一版够用即可）。
-- 第一版 token 使用 JWT，7 天过期；过期后前端统一跳转登录页，不做静默刷新。
-- 密码必须哈希存储，禁止明文保存；`nickname` 全局唯一；密码最少 6 位。
+- 除注册/登录接口外，所有接口需通过 **HttpOnly Cookie** 携带 token，后端设置 `Set-Cookie: token=<jwt>; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`。前端无需手动在请求头添加 Authorization。
+- 第一版 token 使用 JWT，7 天过期；过期后后端返回 `AUTH_INVALID_TOKEN` 错误码，前端统一跳转登录页，不做静默刷新。
+- 密码必须哈希存储（使用 bcrypt 或类似算法），禁止明文保存；`nickname` 全局唯一；密码最少 6 位。
+- **所有权鉴权规则**：所有 PATCH/DELETE 接口必须校验资源所有权，只有资源所属用户（`user_id` 匹配当前登录用户）才能操作。否则返回 `AUTH_INVALID_TOKEN`。
 
 ### 0.3 统一响应格式
 
@@ -132,6 +135,10 @@ Authorization: Bearer <token>
 
 > `step_breakdown` 是 `deepen_official_answer` 模式的核心输出：把官方答案拆成分步骤解释，每一步回答"为什么"，而不是简单重复官方答案的文字。前端应把这部分做成可展开的分步卡片，而不是一段文字堆在一起。
 
+> **revealed_full_solution 语义约定**：
+> - `solve_from_scratch` 模式：初始为 false，用户请求完整解答后变为 true
+> - `deepen_official_answer` 模式：始终为 true（因为答案直接返回）
+
 > **数学公式渲染约定**：`hint_text`、`full_solution_text`、`step_breakdown[].explanation`、追问的 `reply_text` 中，凡涉及数学表达式，AI输出时必须用标准LaTeX语法包裹——行内公式用 `$...$`，独立公式用 `$$...$$`。调用AI模型的系统提示词里要显式要求这一点，否则模型可能输出纯文本公式（如 `x^2+y^2`），导致前端无法正确渲染。前端使用 KaTeX（而非更重的MathJax）扫描并渲染这些定界符，这是本产品区别于普通搜题工具的必要细节，不能省略。
 
 ### MistakeRecord（错题本条目）
@@ -155,7 +162,7 @@ Authorization: Bearer <token>
   "id": "uuid",
   "user_id": "uuid",
   "knowledge_tag": "计数原理",
-  "reason": "该知识点近7天错误率超过50%",
+  "reason": "该知识点近7天求助率超过50%",
   "recommended_action": "review | practice",
   "related_question_ids": ["uuid"],
   "status": "pending | done | dismissed"
@@ -206,9 +213,208 @@ Authorization: Bearer <token>
 
 ---
 
-## 3. 模块二：智能答疑
+## 3. 模块二：真题练习（第一主轴）
 
-### 3.1 提交问题——从零开始问
+### 3.1 获取当前练习题
+
+`GET /practice/questions/current?subject=数学&after_id=上一题ID`
+
+`after_id` 可选；传入时返回同学科的下一题，到末尾后从第一题重新开始。
+
+指定打开某道练习题：`GET /practice/questions/{question_id}`。
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "question": {
+      "id": "uuid",
+      "subject": "数学",
+      "title": "数列递推通项",
+      "source": "真题改编",
+      "content_text": "题目内容",
+      "official_answer_text": "参考答案",
+      "knowledge_tags": ["数列"],
+      "difficulty": "medium",
+      "created_at": "ISO8601"
+    },
+    "latest_attempt": null
+  },
+  "message": "ok"
+}
+```
+
+### 3.2 提交练习作答
+
+`POST /practice/questions/{question_id}/attempt`
+
+请求：
+
+```json
+{ "answer_text": "学生自己的作答过程" }
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "question": {},
+    "attempt": {
+      "id": "uuid",
+      "practice_question_id": "uuid",
+      "answer_text": "学生自己的作答过程",
+      "is_correct": false,
+      "score": 72,
+      "feedback_text": "针对学生答案的反馈",
+      "step_breakdown": [
+        { "step_number": 1, "explanation": "关键步骤评阅" }
+      ],
+      "next_action": "下一步复盘建议",
+      "created_at": "ISO8601"
+    }
+  },
+  "message": "ok"
+}
+```
+
+### 3.3 获取最近练习记录
+
+`GET /practice/attempts`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": { "items": [] },
+  "message": "ok"
+}
+```
+
+### 3.4 获取真题试卷列表
+
+`GET /exam/papers?subject=数学`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": { "items": [] },
+  "message": "ok"
+}
+```
+
+### 3.5 获取某份试卷的题目
+
+`GET /exam/papers/{paper_id}/questions`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "paper": {},
+    "items": []
+  },
+  "message": "ok"
+}
+```
+
+### 3.6 获取单题与 AI 理解档案
+
+`GET /exam/questions/{question_id}`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "question": {},
+    "profile": null
+  },
+  "message": "ok"
+}
+```
+
+### 3.7 生成或更新 AI 理解档案
+
+`POST /exam/questions/{question_id}/profile`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "question": {},
+    "profile": {
+      "knowledge_tags": ["数列"],
+      "difficulty": "medium",
+      "core_idea": "核心思想",
+      "common_mistakes": ["常见错误"],
+      "exam_intent": "命题意图",
+      "prerequisites": ["前置知识"]
+    }
+  },
+  "message": "ok"
+}
+```
+
+### 3.8 手动结构化导入真题
+
+`POST /exam/ingest/manual`
+
+请求：
+
+```json
+{
+  "paper": {
+    "year": 2024,
+    "region": "全国",
+    "subject": "数学",
+    "title": "数学真题结构化导入样例",
+    "source_name": "人工整理样例",
+    "source_url": null,
+    "license_note": "仅用于个人学习和本地开发验证"
+  },
+  "questions": [
+    {
+      "question_number": "1",
+      "question_type": "填空题",
+      "content_text": "题目内容",
+      "official_answer_text": "参考答案",
+      "knowledge_tags": ["知识点"],
+      "difficulty": "easy"
+    }
+  ]
+}
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "paper_id": "uuid",
+    "imported_count": 1
+  },
+  "message": "ok"
+}
+```
+
+---
+
+## 3B. 模块二 B：题目解析（辅助入口）
+
+### 3B.1 提交问题——从零开始问
 
 `POST /questions`
 
@@ -231,7 +437,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 3.1b 提交问题——深化官方答案
+### 3B.1b 提交问题——深化官方答案
 
 `POST /questions`
 
@@ -246,7 +452,7 @@ Authorization: Bearer <token>
 
 响应同样为 `{ question, answer }`。前端表单必须提供两个独立输入框（题目 / 官方答案），不能合并成一个大文本框，否则AI难以区分哪部分是题目哪部分是答案。
 
-### 3.2 提交问题（图片）
+### 3B.2 提交问题（图片）
 
 `POST /questions/image`
 
@@ -255,7 +461,7 @@ Authorization: Bearer <token>
 
 > 第一版决定：图片只用于当次 OCR/多模态识别，不持久化原图；`content_image_url` 与 `official_answer_image_url` 固定返回 `null`。如未来需要回看原图，再接入对象存储。
 
-### 3.3 获取AI讲解
+### 3B.3 获取AI讲解
 
 `GET /questions/{question_id}/answer`
 
@@ -290,17 +496,47 @@ Authorization: Bearer <token>
 
 这个模式下用户已经有官方答案了，"藏答案"没有意义，`step_breakdown` 和 `full_solution_text` 直接一起返回。
 
-### 3.4 请求完整解答（仅 solve_from_scratch 模式适用，用户点击"直接看答案"）
+### 3B.4 请求完整解答（仅 solve_from_scratch 模式适用，用户点击"直接看答案"）
 
 `POST /questions/{question_id}/reveal-solution` 响应：Answer 对象，此时 `full_solution_text` 填充，`revealed_full_solution` 变 true
 
-### 3.5 追问
+### 3B.5 获取追问选项
+
+`GET /questions/{question_id}/follow-up-options`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "options": [
+      { "id": "A", "text": "这一步为什么这样做" },
+      { "id": "B", "text": "有没有更简单的方法" },
+      { "id": "C", "text": "这个知识点在教材哪一页" }
+    ],
+    "allow_custom": true
+  },
+  "message": "ok"
+}
+```
+
+> `options` 由后端根据题目和已有讲解生成，最多 3 个选项（A/B/C）。`allow_custom` 为 true 时，前端允许用户自定义输入追问内容。
+
+### 3B.6 提交追问
 
 `POST /questions/{question_id}/follow-up`
 
+请求：
+
 ```json
-{ "content_text": "这一步为什么这样做" }
+{
+  "option_id": "A" | null,
+  "custom_text": "string | null"
+}
 ```
+
+> 规则：`option_id` 和 `custom_text` 必须有且仅有一个有值。选择预设选项时填 `option_id`；自定义追问时填 `custom_text`。
 
 响应：
 
@@ -348,7 +584,7 @@ Authorization: Bearer <token>
   "success": true,
   "data": {
     "tags": [
-      { "knowledge_tag": "计数原理", "mistake_count": 5, "error_rate": 0.62 }
+      { "knowledge_tag": "计数原理", "mistake_count": 5, "help_rate": 0.62 }
     ]
   },
   "message": "ok"
@@ -356,6 +592,7 @@ Authorization: Bearer <token>
 ```
 
 > 说明：一道题被判定为"错题"的规则第一版可以简化为——用户点击过"直接看答案"即计入错题本。不必做复杂的正误判定逻辑。
+> `help_rate`（求助率）= 该知识点下点击"直接看答案"的题目数 / 该知识点下总题目数。
 
 ---
 
@@ -381,60 +618,89 @@ Authorization: Bearer <token>
 { "status": "done" }
 ```
 
-> 第一版推荐逻辑用规则引擎：知识点错误率 > 50% 时生成一条 "review" 类型推荐；不接机器学习推荐算法。规则计算可以设计成定时任务（如每天跑一次），不需要实时。
+> 第一版推荐逻辑用规则引擎：知识点求助率（help_rate）> 50% 时生成一条 "review" 类型推荐；不接机器学习推荐算法。规则计算可以设计成定时任务（如每天跑一次），不需要实时。
 
 ---
 
 ## 6. 第一版已拍板的技术约束
 
-1. **AI服务商与调用方式**：后端通过一个统一 AI 服务层调用模型。第一版默认使用环境变量 `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` 配置；没有配置时接口返回 `AI_SERVICE_ERROR`，不得用假 AI 数据冒充完成。AI 请求超时 60 秒；网络错误最多重试 1 次；模型内容质量问题不自动重试。
-2. **图片存储**：第一版不持久化原图。图片只用于当次 OCR/多模态识别，数据库里的图片 URL 字段固定为 `null`。
-3. **限流规则**：单用户每天最多 30 次 AI 请求，包括提交问题、图片问题、追问、请求完整答案。
-4. **token过期时间**：JWT 7 天过期；过期后前端统一跳转登录页，不做静默刷新。
-5. **数学公式渲染库**：前端需引入 KaTeX（含对应CSS），并实现一个统一的"文本+公式混排"渲染组件，扫描 `$...$` / `$$...$$` 定界符分段渲染，所有展示AI讲解文字的位置（答案卡片、追问回复）都必须复用这一个组件，不能各自实现一套。
-6. **第一版页面范围**：登录/注册、首页提问、答案展示、追问、错题列表、薄弱点统计、学习路径列表。暂不做完整 Workspace。
+1. **技术栈**：
+   - 后端：Python 3.10+ / FastAPI + PostgreSQL
+   - 前端：React 18+ / Vite
+   - ORM：SQLAlchemy（后端）
+   - 密码哈希：bcrypt
+
+2. **AI服务商与调用方式**：后端通过一个统一 AI 服务层调用模型。第一版默认使用环境变量 `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` 配置；没有配置时接口返回 `AI_SERVICE_ERROR`，不得用假 AI 数据冒充完成。AI 请求超时 60 秒；网络错误最多重试 1 次；模型内容质量问题不自动重试。
+   - **AI超时前端UX**：显示加载动画，标注"AI 正在思考..."；超时后显示"AI 暂时没回应，请稍后重试"，返回 `AI_SERVICE_ERROR` 错误码。
+
+3. **图片存储**：第一版不持久化原图。图片只用于当次 OCR/多模态识别，数据库里的图片 URL 字段固定为 `null`。
+
+4. **限流规则**：单用户每天最多 30 次 AI 请求，包括提交问题、图片问题、追问、请求完整答案。
+
+5. **token存储与过期**：JWT 通过 HttpOnly Cookie 存储，7 天过期；过期后后端返回 `AUTH_INVALID_TOKEN` 错误码，前端统一跳转登录页，不做静默刷新。
+
+6. **数学公式渲染库**：前端需引入 KaTeX（含对应CSS），并实现一个统一的"文本+公式混排"渲染组件，扫描 `$...$` / `$$...$$` 定界符分段渲染，所有展示AI讲解文字的位置（答案卡片、追问回复）都必须复用这一个组件，不能各自实现一套。
+
+7. **第一版页面范围**：登录/注册、首页提问、答案展示、追问、错题列表、薄弱点统计、学习路径列表。暂不做完整 Workspace。
+
+8. **CORS配置**：
+   - 开发环境允许：`http://localhost:5173`
+   - 生产环境允许：`https://<your-domain>`
+   - 允许方法：GET/POST/PATCH/DELETE
+   - 允许头：Authorization、Content-Type
+   - 允许携带凭证：true
+
+9. **knowledge_tags归一化**：
+   - 学科固定枚举：数学、物理、化学、生物、语文、英语、历史、地理、政治
+   - 知识点标签允许 AI 生成，但后端需做归一化（同义词映射）
+   - 数据库保留原始标签和规范标签两列
+   - 前端展示和统计均使用规范标签
 
 ---
 
 ## 7. 视觉设计规范（给Trae开发前端参照）
 
-### 7.1 色彩
+### 7.1 设计方向
+
+Studyoo 的界面应像一份可交互的学习期刊：理性、温暖、安静、重视阅读与思考。借鉴编辑出版物的网格、索引、分割线和留白，但不复制任何第三方品牌标识、字体或页面结构。
+
+- 重点是“先做题，再理解”，不是 SaaS 营销或聊天机器人界面
+- 由排版、内容层级和学习节奏建立高级感，不依赖装饰性视觉效果
+- 真题练习是主入口；解析、真题库、错题和学习路径作为学习档案组织
+- 避免蓝紫渐变、霓虹、玻璃拟态、发光阴影、3D 机器人、粒子背景、Bento Grid 和过度卡片化
+
+### 7.2 色彩
 
 |用途|颜色|说明|
 |---|---|---|
-|主强调色（浅蒂芙尼色）|`#7FC9C1`（图标/强调块）、`#C7EAE6`（浅底）、`#1F5D57`（浅底上的文字）|用于当前选中状态、次要强调（如"从零开始问"被选中时）|
-|副强调色（深赤陶色，低饱和）|`#A85C42`（实心按钮底）、`#F0DED2`（浅底）、`#FCF3EC`（深底上的文字）|用于主要行动按钮（提交、确认类），全站只在关键行动点上使用，不滥用|
-|页面背景|`#FCF9E8`|米黄色，叠加浅色格子纹理（见7.3）|
-|正文文字|`#2C2A22`（主）、`#6B6558`（次）、`#9C9382`（弱化/提示）|暖灰色系，避免纯黑纯灰|
-|边框/分割线|`#C9C0A8`|暖色调的浅边框，不用冷灰色|
+|页面背景|`#FCF9E8`|温暖米黄色，保持纸张感；不再依赖明显网格纹理|
+|内容浅底|`#F3EED8`|用于题目解析、学习提示等内容区块|
+|正文文字|`#2C2A22`（主）、`#6B6558`（次）|暖黑与暖灰，避免纯黑纯灰|
+|边框/分割线|`#C9C0A8`、`#9D947F`|优先使用细分割线建立结构|
+|主行动色（赤陶）|`#A85C42`、`#F0DED2`|仅用于提交、确认、继续等关键行动|
+|次强调色（蒂芙尼）|`#7FC9C1`、`#C7EAE6`、`#1F5D57`|用于选中状态、理解提示、学习反馈|
 
-> 原则：全站只有两个强调色（蒂芙尼、赤陶），不新增第三个撞色。蒂芙尼色用于"轻量的、次要的选中状态"，赤陶色用于"需要用户採取行动的按钮"，两者不混用在同一类元素上。
+原则：全站仍只有蒂芙尼与赤陶两个强调色。赤陶推动行动，蒂芙尼表达理解与状态，两者不在同一类控件中混用。
 
-### 7.2 字体
+### 7.3 字体与内容层级
 
-- 标题、题目文字、公式讲解正文：衬线体（网页端用 `Noto Serif SC` 或类似中文衬线字体，通过 Google Fonts 引入）
-- UI控件文字（按钮、标签、导航）：无衬线体，保持功能性文字的清晰度
-- 不要全站统一用衬线体——衬线体用在"内容"上（营造可信、认真阅读的感觉），无衬线体用在"操作"上（营造清晰、高效的感觉），这个区分要在组件库层面固定下来，不能每个页面各自决定
+- 标题、题目、公式讲解和答案正文使用 `Noto Serif SC`、`Songti SC` 或类似中文衬线体，强调阅读与可信度
+- 导航、按钮、表单、标签和状态信息使用中性无衬线体，保持操作清晰
+- 日期、题号、学科、题型等元信息可使用等宽体，形成研究档案与索引感
+- 标题使用较大字号、较紧行高和适度负字距；正文保持舒适阅读宽度与 1.7 左右行高
+- 不要让所有文字统一使用衬线体，也不要使用夸张粗黑字体
 
-### 7.3 背景纹理
+### 7.4 布局、组件与动效
 
-- 页面背景色 `#FCF9E8` 上叠加浅色网格线，CSS实现：
-
-```css
-background-color: #FCF9E8;
-background-image:
-  linear-gradient(rgba(0,0,0,0.045) 1px, transparent 1px),
-  linear-gradient(90deg, rgba(0,0,0,0.045) 1px, transparent 1px);
-background-size: 22px 22px;
-```
-
-- 这个纹理只用在页面级背景，卡片内部保持纯色（白色或极浅暖白），避免纹理和纹理叠加显得杂乱
-
-### 7.4 圆角与间距
-
-- 卡片：8px圆角
-- 按钮、标签：可用大圆角（999px，胶囊形），也可用8px小圆角，两种在同一页面内不混用，由具体页面统一决定
-- 间距用倍数关系（8px基准），不要随意取值
+- 桌面端使用最大约 1320px 的内容宽度；主内容与右侧学习档案采用不对称双栏
+- 顶部为品牌标题区，下面是“真题练习 / 题目解析 / 真题库”的文字索引式模式切换
+- 练习题以试卷页形式呈现：题目、元信息、作答区和评阅区通过细线分层，不默认包在厚重卡片里
+- 真题库使用“试卷—题目索引—题目详情”的编辑目录结构；错题、薄弱点、学习路径使用学习档案结构
+- 卡片与内容容器圆角不超过 4px；按钮使用 2px 左右小圆角；避免胶囊形控件
+- 页面区块使用 24–48px 内间距，章节间使用 80–160px 留白；不以卡片数量制造信息层级
+- Hover 只允许轻微底色变化、下划线、箭头位移或 2–4px 上移，时长 180–350ms
+- 页面进入可使用 opacity + translateY，位移不超过 24px；必须支持 `prefers-reduced-motion`
+- 移动端将双栏改为单栏，题目索引横向滚动，保持标题冲击力与舒适阅读宽度
 
 ---
 
@@ -442,7 +708,9 @@ background-size: 22px 22px;
 
 - 前端严禁使用mock/假数据模拟以上任何接口的返回结构，若接口未就绪，先在此文档标注"待实现"并阻塞该功能开发，不得用假数据填充后继续往下做。
 - 任何接口字段的增删改，必须先修改本文档对应章节，再修改代码，且需在commit信息中注明"同步了API契约的XX变更"。
-- 每完成一个接口的前后端联调，在下方"联调进度"表格中打勾。
+- **进度跟踪分工**：
+  - **本文档联调进度表**：记录每个接口的后端完成、前端对接完成、真实数据联调通过状态，由 Codex 和 Trae 各自打勾。
+  - **PROGRESS.md**：记录用户可见的功能状态（已验证可用/开发中/未开始），由 CodeBuddy 作为唯一维护者。Codex 和 Trae 完成任务后提供"可验证状态"（操作步骤+预期结果），由 CodeBuddy 合并进 PROGRESS.md。
 
 ### 联调进度表
 
@@ -453,6 +721,7 @@ background-size: 22px 22px;
 |GET /users/me|[ ]|[ ]|[ ]|
 |POST /questions|[ ]|[ ]|[ ]|
 |POST /questions/{id}/reveal-solution|[ ]|[ ]|[ ]|
+|GET /questions/{id}/follow-up-options|[ ]|[ ]|[ ]|
 |POST /questions/{id}/follow-up|[ ]|[ ]|[ ]|
 |GET /mistakes|[ ]|[ ]|[ ]|
 |PATCH /mistakes/{id}|[ ]|[ ]|[ ]|

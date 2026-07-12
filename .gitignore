@@ -6,3 +6,6 @@ node_modules
 dist
 .DS_Store
 .obsidian
+backend/uploads/
+/uploads/
+tmp/pdfs/
