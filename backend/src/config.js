@@ -25,6 +25,8 @@ export const config = {
   aiBaseUrl: process.env.AI_BASE_URL || "https://open.bigmodel.cn/api/paas/v4/chat/completions",
   aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 60000),
   aiDailyLimit: Number(process.env.AI_DAILY_LIMIT || 30),
+  aiGlobalDailyLimit: Number(process.env.AI_GLOBAL_DAILY_LIMIT || 200),
+  inviteCode: (process.env.INVITE_CODE || "").trim(),
   uploadDir: resolve(backendRoot, process.env.UPLOAD_DIR || "./uploads"),
   pdfRenderCommand: process.env.PDF_RENDER_COMMAND || "pdftoppm",
   pdfTextCommand: process.env.PDF_TEXT_COMMAND || "pdftotext",

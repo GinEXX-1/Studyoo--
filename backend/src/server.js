@@ -2,8 +2,9 @@ import cors from "cors";
 import express from "express";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { router } from "./routes.js";
 import { importRouter } from "./routes-import.js";
@@ -13,6 +14,7 @@ import { setupV2 } from "./migrate-v2.js";
 import { AppError, fail } from "./http.js";
 import { requireAuth } from "./auth.js";
 import { authorizeUpload } from "./upload-access.js";
+import { scheduleDailyBackup } from "./backup.js";
 
 const app = express();
 
@@ -40,6 +42,16 @@ app.use((req, res, next) => {
 
 const uploadDir = resolve(config.uploadDir);
 mkdirSync(uploadDir, { recursive: true });
+
+// 种子数据（公共卷）引用的图片/PDF 随代码分发，启动时铺进上传目录。
+// 生产环境 UPLOAD_DIR 是独立卷，镜像里的 seed-assets 不铺过去就会 404。
+const seedAssetsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../seed-assets");
+if (existsSync(seedAssetsDir)) {
+  for (const name of readdirSync(seedAssetsDir)) {
+    const target = join(uploadDir, name);
+    if (!existsSync(target)) copyFileSync(join(seedAssetsDir, name), target);
+  }
+}
 // 上传目录包含用户原卷与题目图片，访问时同时校验资源归属。
 app.use("/uploads", requireAuth, authorizeUpload, express.static(uploadDir, {
   fallthrough: true,
@@ -102,6 +114,10 @@ app.use((error, _req, res, _next) => {
   console.error(`[${new Date().toISOString()}] Unhandled error:`, error.message || error);
   return fail(res, 500, "SERVER_ERROR", "服务器暂时不可用。");
 });
+
+if (process.env.NODE_ENV === "production" || process.env.BACKUP_ENABLED === "true") {
+  scheduleDailyBackup();
+}
 
 app.listen(config.port, () => {
   console.log(`Studyoo API running at http://localhost:${config.port}/api/v1`);

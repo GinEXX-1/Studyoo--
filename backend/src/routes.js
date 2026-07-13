@@ -254,6 +254,13 @@ function collectWeaknesses(userId) {
 }
 
 router.post("/auth/register", authRateLimiter(), asyncRoute(async (req, res) => {
+  // 内测邀请码：设置了 INVITE_CODE 环境变量才启用，防止开放注册烧穿 AI 余额
+  if (config.inviteCode) {
+    const invite = typeof req.body.invite_code === "string" ? req.body.invite_code.trim() : "";
+    if (invite !== config.inviteCode) {
+      throw new AppError(403, "INVITE_REQUIRED", "内测阶段注册需要邀请码，请向管理员获取。");
+    }
+  }
   const nickname = requireString(req.body.nickname, "昵称");
   if (nickname.length < 2 || nickname.length > 30 || !/^[\u4e00-\u9fff\w_-]+$/.test(nickname)) {
     throw new AppError(400, "VALIDATION_ERROR", "昵称需 2-30 位，仅支持中文、字母、数字、下划线和连字符。");

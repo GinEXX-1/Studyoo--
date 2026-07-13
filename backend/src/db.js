@@ -249,6 +249,14 @@ CREATE TABLE IF NOT EXISTS practice_follow_ups (
 );
 `);
 
+// 全站每日 AI 用量（防批量注册绕过按用户配额烧钱）
+db.exec(`
+CREATE TABLE IF NOT EXISTS ai_usage_global (
+  used_on TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0
+);
+`);
+
 /**
  * 添加数据库列（仅接受硬编码字面量，禁止传入用户输入）。
  * 所有调用均使用编译时常量，不存在 SQL 注入风险。
