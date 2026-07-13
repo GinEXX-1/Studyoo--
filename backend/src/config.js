@@ -29,5 +29,6 @@ export const config = {
   pdfRenderCommand: process.env.PDF_RENDER_COMMAND || "pdftoppm",
   pdfTextCommand: process.env.PDF_TEXT_COMMAND || "pdftotext",
   corsOrigin: (process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:5174").split(","),
+  frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
   secureCookie: process.env.NODE_ENV === "production"
 };

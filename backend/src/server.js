@@ -47,17 +47,20 @@ app.use("/uploads", requireAuth, authorizeUpload, express.static(uploadDir, {
 }));
 app.use("/uploads", (_req, res) => fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这个文件。"));
 
-app.get("/health", (_req, res) => {
+const healthHandler = (_req, res) => {
   res.json({ success: true, data: { status: "ok" }, message: "ok" });
-});
+};
+
+app.get("/health", healthHandler);
+app.get("/api/v1/health", healthHandler);
 
 app.get("/", (_req, res) => {
   res.json({
     success: true,
     data: {
       name: "Studyoo API",
-      frontend: "http://localhost:5173",
-      api_base_url: `http://localhost:${config.port}/api/v1`
+      frontend: config.frontendUrl,
+      api_base_url: "/api/v1"
     },
     message: "这是后端 API，不是前端页面，请打开前端地址。"
   });
@@ -68,8 +71,8 @@ app.get("/api/v1", (_req, res) => {
     success: true,
     data: {
       name: "Studyoo API",
-      frontend: "http://localhost:5173",
-      api_base_url: `http://localhost:${config.port}/api/v1`
+      frontend: config.frontendUrl,
+      api_base_url: "/api/v1"
     },
     message: "这是后端 API，不是前端页面，请打开前端地址。"
   });
