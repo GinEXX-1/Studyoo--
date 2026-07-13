@@ -1,0 +1,13 @@
+:root {
+  --space-1: 4px; --space-2: 6px; --space-3: 8px; --space-4: 10px;
+  --space-5: 12px; --space-6: 14px; --space-7: 16px; --space-8: 18px;
+  --space-9: 20px; --space-10: 24px; --space-11: 28px; --space-12: 34px;
+  --space-13: 38px; --space-14: 42px; --space-16: 50px; --space-20: 80px;
+  --radius-sm: 0px; --radius-md: 2px; --radius-lg: 2px; --radius-xl: 3px;
+  --shadow-card: 0 18px 50px rgba(58,48,34,.12);
+  --shadow-hover: 0 8px 22px rgba(58,48,34,.14);
+  --shadow-focus: 0 0 0 3px rgba(181,67,46,.14);
+  --ease-standard: cubic-bezier(.2,.8,.2,1);
+  --ease-page: cubic-bezier(.65,0,.35,1);
+  --duration-fast: .18s; --duration-base: .3s; --duration-page: .6s;
+}

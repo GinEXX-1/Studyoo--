@@ -221,6 +221,32 @@ CREATE TABLE IF NOT EXISTS practice_sessions (
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (collection_id) REFERENCES question_collections(id)
 );
+
+CREATE TABLE IF NOT EXISTS practice_evaluation_cache (
+  cache_key TEXT PRIMARY KEY,
+  practice_question_id TEXT NOT NULL,
+  answer_hash TEXT NOT NULL,
+  evaluation_json TEXT NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL,
+  FOREIGN KEY (practice_question_id) REFERENCES practice_questions(id)
+);
+
+CREATE TABLE IF NOT EXISTS practice_follow_ups (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  practice_question_id TEXT NOT NULL,
+  attempt_id TEXT,
+  context_type TEXT NOT NULL DEFAULT 'analysis',
+  context_text TEXT,
+  content_text TEXT NOT NULL,
+  reply_text TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (practice_question_id) REFERENCES practice_questions(id),
+  FOREIGN KEY (attempt_id) REFERENCES practice_attempts(id)
+);
 `);
 
 /**
@@ -246,6 +272,8 @@ ensureColumn("exam_questions", "page_number", "INTEGER");
 ensureColumn("practice_questions", "content_image_url", "TEXT");
 ensureColumn("practice_questions", "exam_question_id", "TEXT");
 ensureColumn("practice_questions", "owner_user_id", "TEXT");
+ensureColumn("practice_attempts", "from_cache", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("practice_sessions", "grading_mode", "TEXT NOT NULL DEFAULT 'individual'");
 ensureColumn("learning_path_items", "source", "TEXT NOT NULL DEFAULT 'ai'");
 ensureColumn("learning_path_items", "generated_at", "TEXT");
 
@@ -759,6 +787,7 @@ export function toPracticeAttempt(row) {
     feedback_text: row.feedback_text,
     step_breakdown: parseJson(row.step_breakdown_json, []),
     next_action: row.next_action,
+    from_cache: Boolean(row.from_cache),
     created_at: row.created_at
   };
 }
@@ -813,6 +842,7 @@ export function toQuestionCollection(row) {
     cover_style: row.cover_style,
     source_paper_id: row.source_paper_id || null,
     question_count: Number(row.question_count || 0),
+    is_completed: Boolean(row.is_completed),
     created_at: row.created_at
   };
 }

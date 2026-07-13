@@ -7,7 +7,10 @@
     "start": "node --no-warnings src/server.js",
     "check:ai": "node --no-warnings scripts/check-ai.js",
     "smoke:minimal": "node --no-warnings scripts/smoke-minimal.js",
-    "test:ownership": "rm -f /tmp/studyoo-ownership-test.db && node --no-warnings scripts/test-ownership.mjs"
+    "test:ownership": "rm -f /tmp/studyoo-ownership-test.db && node --no-warnings scripts/test-ownership.mjs",
+    "test:import-editing": "rm -f /tmp/studyoo-import-editing-test.db && node --no-warnings scripts/test-import-editing.mjs",
+    "test:practice-workflow": "rm -f /tmp/studyoo-practice-workflow-test.db && node --no-warnings scripts/test-practice-workflow.mjs",
+    "quality:import": "node --no-warnings scripts/import-quality-report.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -22,10 +22,21 @@ import { config } from "./config.js";
 import { ensureAiConfigured, recognizePageQuestions, recognizeSingleQuestion } from "./ai.js";
 import { withAiQuota } from "./quota.js";
 import sharp from "sharp";
+import { extractStructuredPdfText } from "./pdf-text.js";
 
 const execFileAsync = promisify(execFile);
 
 export const importRouter = express.Router();
+
+async function prepareVisionImageDataUrl(imagePath) {
+  const optimized = await sharp(imagePath)
+    .rotate()
+    .normalize()
+    .sharpen({ sigma: 0.6 })
+    .jpeg({ quality: 88, chromaSubsampling: "4:4:4" })
+    .toBuffer();
+  return `data:image/jpeg;base64,${optimized.toString("base64")}`;
+}
 
 // ——— 工具 ———
 function requireString(value, label) {
@@ -197,6 +208,69 @@ function ensureImportedLibrary({ task, userId, createdAt }) {
   return { paperId, collectionId };
 }
 
+function updateTaskCandidateCount(taskId) {
+  const questionCount = db.prepare("SELECT COUNT(*) AS cnt FROM question_candidates WHERE task_id = ?").get(taskId).cnt;
+  db.prepare("UPDATE import_tasks SET question_count = ?, status = 'awaiting_review', updated_at = ? WHERE id = ?")
+    .run(questionCount, nowIso(), taskId);
+}
+
+function normalizeManualBBox(value) {
+  if (value == null) return null;
+  const bbox = {
+    x: Number(value.x),
+    y: Number(value.y),
+    width: Number(value.width),
+    height: Number(value.height)
+  };
+  if (Object.values(bbox).some((item) => !Number.isFinite(item))
+    || bbox.x < 0 || bbox.y < 0 || bbox.width <= 0 || bbox.height <= 0
+    || bbox.x + bbox.width > 100.01 || bbox.y + bbox.height > 100.01) {
+    throw new AppError(400, "VALIDATION_ERROR", "框选区域坐标不合法。");
+  }
+  return bbox;
+}
+
+function insertManualCandidate({ task, page, input = {}, fallback = {}, createdAt = nowIso() }) {
+  const candidateId = randomUUID();
+  const questionNumber = Number(input.question_number ?? fallback.question_number);
+  const stemText = requireString(input.stem_text ?? fallback.stem_text, "题目内容");
+  const options = Array.isArray(input.options) ? input.options : parseJson(fallback.options_json, []);
+  const tags = normalizeKnowledgeTags(task.subject, Array.isArray(input.knowledge_tags)
+    ? input.knowledge_tags
+    : parseJson(fallback.knowledge_tags_json, []));
+  const difficulty = ["easy", "medium", "hard"].includes(input.difficulty) ? input.difficulty : (fallback.difficulty || "medium");
+  const questionType = ["choice", "fill-in-blank", "short-answer"].includes(input.question_type)
+    ? input.question_type
+    : (fallback.question_type || "choice");
+  const manualBBox = normalizeManualBBox(input.crop_bbox_json);
+
+  if (!Number.isInteger(questionNumber) || questionNumber < 1) {
+    throw new AppError(400, "VALIDATION_ERROR", "题号必须是正整数。");
+  }
+
+  db.prepare(`
+    INSERT INTO question_candidates (
+      id, task_id, page_id, page_number, question_number, subject,
+      stem_text, options_json, reference_answer_text, knowledge_tags_json,
+      difficulty, question_type, recognition_confidence, requires_manual_review,
+      review_status, reviewed_by, reviewed_at, review_notes, created_at, updated_at,
+      crop_bbox_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'reviewing', ?, ?, ?, ?, ?, ?)
+  `).run(
+    candidateId, task.id, page.id, page.page_number, questionNumber, task.subject,
+    stemText,
+    JSON.stringify(options.filter((item) => item && typeof item.label === "string")),
+    typeof input.reference_answer_text === "string" ? input.reference_answer_text.trim() : (fallback.reference_answer_text || ""),
+    JSON.stringify(tags), difficulty, questionType,
+    typeof fallback.recognition_confidence === "number" ? fallback.recognition_confidence : null,
+    task.user_id, createdAt,
+    typeof input.review_notes === "string" ? input.review_notes.trim() : "人工校对创建",
+    createdAt, createdAt,
+    manualBBox ? JSON.stringify(manualBBox) : (fallback.crop_bbox_json || null)
+  );
+  return db.prepare("SELECT * FROM question_candidates WHERE id = ?").get(candidateId);
+}
+
 // ——— 1. 上传 PDF，创建导入任务 ———
 importRouter.post("/import/pipeline/upload", requireAuth, asyncRoute(async (req, res) => {
   const fileName = requireString(req.body.file_name, "PDF 文件名");
@@ -229,7 +303,7 @@ importRouter.post("/import/pipeline/upload", requireAuth, asyncRoute(async (req,
   const pagePrefix = resolve(uploadDir, `import-${taskId}-page`);
   let pageFiles = [];
   try {
-    await execFileAsync(config.pdfRenderCommand, ["-png", "-r", "150", pdfPath, pagePrefix], { timeout: 120000 });
+    await execFileAsync(config.pdfRenderCommand, ["-png", "-r", "180", pdfPath, pagePrefix], { timeout: 120000 });
     pageFiles = readdirSync(uploadDir)
       .filter((name) => name.startsWith(`import-${taskId}-page-`) && name.endsWith(".png"))
       .sort((a, b) => Number(a.match(/-(\d+)\.png$/)?.[1]) - Number(b.match(/-(\d+)\.png$/)?.[1]));
@@ -296,6 +370,8 @@ importRouter.get("/import/pipeline/tasks/:taskId", requireAuth, (req, res) => {
     .filter((item) => Number.isInteger(item) && item > 0);
   const highestQuestionNumber = numbers.length ? Math.max(...numbers) : 0;
   const knownNumbers = new Set(numbers);
+  const numberCounts = numbers.reduce((counts, number) => counts.set(number, (counts.get(number) || 0) + 1), new Map());
+  const duplicateQuestionNumbers = [...numberCounts.entries()].filter(([, count]) => count > 1).map(([number]) => number);
   const missingQuestionNumbers = Array.from({ length: highestQuestionNumber }, (_, index) => index + 1)
     .filter((number) => !knownNumbers.has(number));
 
@@ -306,7 +382,8 @@ importRouter.get("/import/pipeline/tasks/:taskId", requireAuth, (req, res) => {
     integrity: {
       recognized_count: candidates.length,
       highest_question_number: highestQuestionNumber,
-      missing_question_numbers: missingQuestionNumbers
+      missing_question_numbers: missingQuestionNumbers,
+      duplicate_question_numbers: duplicateQuestionNumbers
     }
   }));
 });
@@ -367,9 +444,7 @@ importRouter.post("/import/pipeline/pages/:pageId/process", requireAuth, asyncRo
   if (!existsSync(imagePath)) {
     throw new AppError(500, "FILE_ERROR", "页面图片文件丢失，请重新上传PDF。");
   }
-  const imageBuffer = readFileSync(imagePath);
-  const imageBase64 = imageBuffer.toString("base64");
-  const imageDataUrl = `data:image/png;base64,${imageBase64}`;
+  const imageDataUrl = await prepareVisionImageDataUrl(imagePath);
 
   // 调用 AI 识别（计入每日配额）
   let recognition;
@@ -465,6 +540,80 @@ importRouter.post("/import/pipeline/tasks/:taskId/process-all", requireAuth, asy
     return res.json(ok({ message: "所有页面已处理完毕。", processed: 0, total: 0 }));
   }
 
+  // 数字版 PDF 优先使用内置文字层：本地完成题号切分和答案关联，避免逐页调用视觉模型。
+  const confirmedCount = db.prepare("SELECT COUNT(*) AS cnt FROM question_candidates WHERE task_id = ? AND review_status = 'confirmed'")
+    .get(task.id).cnt;
+  if (confirmedCount === 0 && pages.length === task.total_pages && task.pdf_filename) {
+    const pdfPath = resolve(config.uploadDir, task.pdf_filename);
+    try {
+      const extraction = await extractStructuredPdfText(pdfPath);
+      if (extraction.reliable) {
+        const pageByNumber = new Map(pages.map((page) => [page.page_number, page]));
+        const createdAt = nowIso();
+        db.exec("BEGIN");
+        try {
+          db.prepare("DELETE FROM question_candidates WHERE task_id = ?").run(task.id);
+          for (const question of extraction.questions) {
+            const page = pageByNumber.get(question.page_number) || pages[0];
+            db.prepare(`
+              INSERT INTO question_candidates (
+                id, task_id, page_id, page_number, question_number, subject,
+                stem_text, options_json, reference_answer_text, knowledge_tags_json,
+                difficulty, question_type, recognition_confidence, requires_manual_review,
+                review_status, created_at, updated_at, crop_bbox_json
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, '[]', ?, ?, ?, 1, 'pending', ?, ?, NULL)
+            `).run(
+              randomUUID(), task.id, page.id, question.page_number, question.question_number, task.subject,
+              question.stem_text, question.reference_answer_text, question.difficulty,
+              question.question_type, question.confidence, createdAt, createdAt
+            );
+          }
+          for (const page of pages) {
+            const pageQuestions = extraction.questions.filter((question) => question.page_number === page.page_number);
+            db.prepare("UPDATE import_pages SET ocr_status = 'processed', ocr_raw_text = ?, ocr_result_json = ?, error_message = NULL WHERE id = ?")
+              .run(
+                (extraction.pages[page.page_number - 1] || "").slice(0, 8000),
+                JSON.stringify({ mode: "pdf_text", questions: pageQuestions }),
+                page.id
+              );
+          }
+          db.prepare("UPDATE import_tasks SET status = 'awaiting_review', processed_pages = ?, question_count = ?, updated_at = ? WHERE id = ?")
+            .run(task.total_pages, extraction.questions.length, createdAt, task.id);
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+
+        console.log(`[import] local-text task=${task.id} pages=${task.total_pages} questions=${extraction.questions.length} elapsed_ms=${extraction.elapsed_ms}`);
+        return res.json(ok({
+          mode: "pdf_text",
+          results: pages.map((page) => ({
+            page_number: page.page_number,
+            status: "processed",
+            question_count: extraction.questions.filter((question) => question.page_number === page.page_number).length
+          })),
+          processed: task.total_pages,
+          total: task.total_pages,
+          elapsed_ms: extraction.elapsed_ms
+        }));
+      }
+      console.log(`[import] local-text-unreliable task=${task.id} detected=${extraction.questions.length} elapsed_ms=${extraction.elapsed_ms}; fallback=vision`);
+    } catch (error) {
+      console.warn(`[import] local-text-failed task=${task.id} error=${error.message}; fallback=vision`);
+    }
+  }
+
+  // 前端先走快速文字层探测；只有确实需要视觉模型时，才改为逐页请求并展示真实进度。
+  if (req.query.prefer_text_only === "1") {
+    return res.json(ok({
+      mode: "vision_required",
+      processed: 0,
+      total: pages.length,
+      pages: pages.map((page) => ({ id: page.id, page_number: page.page_number }))
+    }));
+  }
+
   ensureAiConfigured();
   db.prepare("UPDATE import_tasks SET status = 'processing', updated_at = ? WHERE id = ?").run(nowIso(), task.id);
 
@@ -481,9 +630,7 @@ importRouter.post("/import/pipeline/tasks/:taskId/process-all", requireAuth, asy
         results.push({ page_number: page.page_number, status: "failed", error: "页面图片丢失" });
         continue;
       }
-      const imageBuffer = readFileSync(imagePath);
-      const imageBase64 = imageBuffer.toString("base64");
-      const imageDataUrl = `data:image/png;base64,${imageBase64}`;
+      const imageDataUrl = await prepareVisionImageDataUrl(imagePath);
 
       const recognition = await withAiQuota(req.user.id, () => recognizePageQuestions({
         subject: task.subject,
@@ -611,6 +758,175 @@ importRouter.patch("/import/pipeline/candidates/:candidateId", requireAuth, asyn
   res.json(ok(toQuestionCandidate(db.prepare("SELECT * FROM question_candidates WHERE id = ?").get(candidate.id))));
 }));
 
+// 人工补录漏识别题目。
+importRouter.post("/import/pipeline/pages/:pageId/candidates", requireAuth, asyncRoute(async (req, res) => {
+  const page = db.prepare(`
+    SELECT p.* FROM import_pages p
+    JOIN import_tasks t ON t.id = p.task_id
+    WHERE p.id = ? AND t.user_id = ?
+  `).get(req.params.pageId, req.user.id);
+  if (!page) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这个页面。");
+  const task = db.prepare("SELECT * FROM import_tasks WHERE id = ?").get(page.task_id);
+
+  db.exec("BEGIN");
+  let row;
+  try {
+    row = insertManualCandidate({ task, page, input: req.body });
+    updateTaskCandidateCount(task.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  await generateCropsForCandidates(page, [row.id]);
+  const refreshed = db.prepare("SELECT * FROM question_candidates WHERE id = ?").get(row.id);
+  res.status(201).json(ok(toQuestionCandidate(refreshed)));
+}));
+
+// 按用户拖动后的顺序重排候选题，并连续重编号。
+importRouter.post("/import/pipeline/tasks/:taskId/candidates/reorder", requireAuth, (req, res) => {
+  const task = db.prepare("SELECT * FROM import_tasks WHERE id = ? AND user_id = ?").get(req.params.taskId, req.user.id);
+  if (!task) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这个导入任务。");
+  const confirmedCount = db.prepare("SELECT COUNT(*) AS cnt FROM question_candidates WHERE task_id = ? AND review_status = 'confirmed'")
+    .get(task.id).cnt;
+  if (confirmedCount > 0) {
+    throw new AppError(409, "VALIDATION_ERROR", "已有题目确认入库，不能再整体调整题目顺序。");
+  }
+
+  const orderedIds = Array.isArray(req.body.candidate_ids)
+    ? [...new Set(req.body.candidate_ids.filter((id) => typeof id === "string"))]
+    : [];
+  const activeRows = db.prepare("SELECT id FROM question_candidates WHERE task_id = ? AND review_status != 'rejected'").all(task.id);
+  const activeIds = new Set(activeRows.map((row) => row.id));
+  if (orderedIds.length !== activeIds.size || orderedIds.some((id) => !activeIds.has(id))) {
+    throw new AppError(400, "VALIDATION_ERROR", "排序列表与当前待校对题目不一致，请刷新后重试。");
+  }
+
+  const updatedAt = nowIso();
+  db.exec("BEGIN");
+  try {
+    orderedIds.forEach((id, index) => {
+      db.prepare("UPDATE question_candidates SET question_number = ?, review_status = 'reviewing', reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?")
+        .run(index + 1, req.user.id, updatedAt, updatedAt, id);
+    });
+    db.prepare("UPDATE import_tasks SET updated_at = ? WHERE id = ?").run(updatedAt, task.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  const items = db.prepare("SELECT * FROM question_candidates WHERE task_id = ? ORDER BY question_number").all(task.id).map(toQuestionCandidate);
+  res.json(ok({ items }));
+});
+
+// 将 AI 错误合并的一道候选题人工拆成 2-5 道。
+importRouter.post("/import/pipeline/candidates/:candidateId/split", requireAuth, asyncRoute(async (req, res) => {
+  const candidate = db.prepare(`
+    SELECT c.* FROM question_candidates c
+    JOIN import_tasks t ON t.id = c.task_id
+    WHERE c.id = ? AND t.user_id = ?
+  `).get(req.params.candidateId, req.user.id);
+  if (!candidate) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这个题目候选。");
+  if (["confirmed", "rejected"].includes(candidate.review_status)) {
+    throw new AppError(409, "VALIDATION_ERROR", "已确认或已排除的题目不能拆分。");
+  }
+  const parts = Array.isArray(req.body.parts) ? req.body.parts : [];
+  if (parts.length < 2 || parts.length > 5) {
+    throw new AppError(400, "VALIDATION_ERROR", "拆分结果必须包含 2 至 5 道题。");
+  }
+
+  const task = db.prepare("SELECT * FROM import_tasks WHERE id = ?").get(candidate.task_id);
+  const page = db.prepare("SELECT * FROM import_pages WHERE id = ?").get(candidate.page_id);
+  const createdAt = nowIso();
+  const created = [];
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM candidate_crops WHERE candidate_id = ?").run(candidate.id);
+    db.prepare("DELETE FROM question_candidates WHERE id = ?").run(candidate.id);
+    parts.forEach((part, index) => {
+      const fallback = {
+        ...candidate,
+        question_number: Number(candidate.question_number || 1) + index,
+        options_json: index === 0 ? candidate.options_json : "[]",
+        reference_answer_text: index === 0 ? candidate.reference_answer_text : "",
+        crop_bbox_json: null
+      };
+      created.push(insertManualCandidate({ task, page, input: part, fallback, createdAt }));
+    });
+    updateTaskCandidateCount(task.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  cleanupUploadUrls(resolve(config.uploadDir), [candidate.crop_image_url]);
+  res.json(ok({ items: created.map(toQuestionCandidate) }));
+}));
+
+// 合并 2-5 个被 AI 错误拆开的候选题，可用于跨页题干续接。
+importRouter.post("/import/pipeline/candidates/merge", requireAuth, asyncRoute(async (req, res) => {
+  const candidateIds = Array.isArray(req.body.candidate_ids)
+    ? [...new Set(req.body.candidate_ids.filter((id) => typeof id === "string"))]
+    : [];
+  if (candidateIds.length < 2 || candidateIds.length > 5) {
+    throw new AppError(400, "VALIDATION_ERROR", "请选择 2 至 5 道候选题进行合并。");
+  }
+  const placeholders = candidateIds.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT c.* FROM question_candidates c
+    JOIN import_tasks t ON t.id = c.task_id
+    WHERE c.id IN (${placeholders}) AND t.user_id = ?
+    ORDER BY c.page_number, c.question_number
+  `).all(...candidateIds, req.user.id);
+  if (rows.length !== candidateIds.length) {
+    throw new AppError(400, "VALIDATION_ERROR", "部分候选题不存在或无权操作。");
+  }
+  if (new Set(rows.map((row) => row.task_id)).size !== 1) {
+    throw new AppError(400, "VALIDATION_ERROR", "只能合并同一次 PDF 导入中的题目。");
+  }
+  if (rows.some((row) => ["confirmed", "rejected"].includes(row.review_status))) {
+    throw new AppError(409, "VALIDATION_ERROR", "已确认或已排除的题目不能合并。");
+  }
+
+  const first = rows[0];
+  const task = db.prepare("SELECT * FROM import_tasks WHERE id = ?").get(first.task_id);
+  const page = db.prepare("SELECT * FROM import_pages WHERE id = ?").get(first.page_id);
+  const allTags = rows.flatMap((row) => parseJson(row.knowledge_tags_json, []));
+  const optionsRow = rows.find((row) => parseJson(row.options_json, []).length > 0);
+  const fallback = {
+    ...first,
+    stem_text: rows.map((row) => row.stem_text).filter(Boolean).join("\n\n"),
+    options_json: optionsRow?.options_json || "[]",
+    reference_answer_text: rows.map((row) => row.reference_answer_text).filter(Boolean).join("\n"),
+    knowledge_tags_json: JSON.stringify(allTags),
+    crop_bbox_json: null
+  };
+  const input = {
+    ...req.body,
+    question_number: req.body.question_number ?? first.question_number,
+    stem_text: req.body.stem_text ?? fallback.stem_text,
+    knowledge_tags: Array.isArray(req.body.knowledge_tags) ? req.body.knowledge_tags : allTags
+  };
+
+  let merged;
+  db.exec("BEGIN");
+  try {
+    db.prepare(`DELETE FROM candidate_crops WHERE candidate_id IN (${placeholders})`).run(...candidateIds);
+    db.prepare(`DELETE FROM question_candidates WHERE id IN (${placeholders})`).run(...candidateIds);
+    merged = insertManualCandidate({ task, page, input, fallback });
+    updateTaskCandidateCount(task.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  cleanupUploadUrls(resolve(config.uploadDir), rows.map((row) => row.crop_image_url));
+  res.json(ok(toQuestionCandidate(merged)));
+}));
+
 // ——— 8. 单题重新识别 ———
 importRouter.post("/import/pipeline/candidates/:candidateId/re-recognize", requireAuth, asyncRoute(async (req, res) => {
   const candidate = db.prepare(`
@@ -636,7 +952,7 @@ importRouter.post("/import/pipeline/candidates/:candidateId/re-recognize", requi
   if (!existsSync(imagePath)) {
     throw new AppError(500, "FILE_ERROR", "页面图片文件丢失。");
   }
-  const imageDataUrl = `data:image/png;base64,${readFileSync(imagePath).toString("base64")}`;
+  const imageDataUrl = await prepareVisionImageDataUrl(imagePath);
 
   let matched;
   try {
@@ -716,6 +1032,9 @@ importRouter.post("/import/pipeline/candidates/:candidateId/confirm", requireAut
   const difficulty = candidate.difficulty || "medium";
   const knowledgeTags = parseJson(candidate.knowledge_tags_json, []);
   const confidence = candidate.recognition_confidence;
+  const sourceImageUrl = candidate.crop_image_url
+    || db.prepare("SELECT image_url FROM import_pages WHERE id = ?").get(candidate.page_id)?.image_url
+    || null;
 
   const title = `${task.source_name.replace(/\.pdf$/i, "")} · 第 ${candidate.page_number} 页第 ${questionNumber} 题`;
 
@@ -732,7 +1051,7 @@ importRouter.post("/import/pipeline/candidates/:candidateId/confirm", requireAut
     `).run(
       questionId, paperId, questionNumber, task.subject, questionType, stemText,
       answerText, task.source_name, JSON.stringify(knowledgeTags), difficulty,
-      createdAt, candidate.crop_image_url || null, candidate.page_number, task.id, confidence
+      createdAt, sourceImageUrl, candidate.page_number, task.id, confidence
     );
 
     db.prepare(`
@@ -743,7 +1062,7 @@ importRouter.post("/import/pipeline/candidates/:candidateId/confirm", requireAut
     `).run(
       `practice-${questionId}`, task.subject, title, task.source_name, stemText,
       answerText, JSON.stringify(knowledgeTags), difficulty, createdAt,
-      candidate.crop_image_url || null, questionId, task.id, req.user.id
+      sourceImageUrl, questionId, task.id, req.user.id
     );
 
     db.prepare(`
@@ -808,6 +1127,9 @@ importRouter.post("/import/pipeline/candidates/batch-confirm", requireAuth, asyn
     const stemText = candidate.stem_text || "待补充题干";
     const answerText = candidate.reference_answer_text || "原 PDF 未附参考答案。提交作答后，AI 将独立推导并给出评阅意见。";
     const knowledgeTags = parseJson(candidate.knowledge_tags_json, []);
+    const sourceImageUrl = candidate.crop_image_url
+      || db.prepare("SELECT image_url FROM import_pages WHERE id = ?").get(candidate.page_id)?.image_url
+      || null;
 
     db.exec("BEGIN");
     try {
@@ -823,7 +1145,7 @@ importRouter.post("/import/pipeline/candidates/batch-confirm", requireAuth, asyn
         questionId, paperId, questionNumber, task.subject, candidate.question_type || "choice",
         stemText, answerText, task.source_name, JSON.stringify(knowledgeTags),
         candidate.difficulty || "medium", createdAt,
-        candidate.crop_image_url || null, candidate.page_number, task.id, candidate.recognition_confidence
+        sourceImageUrl, candidate.page_number, task.id, candidate.recognition_confidence
       );
 
       const title = `${task.source_name.replace(/\.pdf$/i, "")} · 第 ${candidate.page_number} 页第 ${questionNumber} 题`;
@@ -835,7 +1157,7 @@ importRouter.post("/import/pipeline/candidates/batch-confirm", requireAuth, asyn
       `).run(
         `practice-${questionId}`, task.subject, title, task.source_name, stemText,
         answerText, JSON.stringify(knowledgeTags), candidate.difficulty || "medium", createdAt,
-        candidate.crop_image_url || null, questionId, task.id, req.user.id
+        sourceImageUrl, questionId, task.id, req.user.id
       );
 
       db.prepare(`

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiRequest } from "../lib/api.js";
 import CollectionCover from "../components/CollectionCover.jsx";
 import Stat from "../components/Stat.jsx";
+import MountainMark from "../components/MountainMark.jsx";
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -24,6 +25,7 @@ export default function HomePage() {
   return (
     <div className="page-stack">
       <section className="home-intro">
+        <MountainMark />
         <div>
           <p className="eyebrow">Today</p>
           <h1>从一份真正想做完的试卷开始</h1>
@@ -37,6 +39,7 @@ export default function HomePage() {
           <Stat value={stats?.summary.total_attempts || 0} label="累计作答" />
           <Stat value={`${stats?.summary.correct_rate || 0}%`} label="正确率" />
           <Stat value={stats?.summary.average_score || 0} label="平均分" />
+          <Stat value={stats?.summary.today_pending || 0} label="今日待做" />
         </div>
       </section>
 

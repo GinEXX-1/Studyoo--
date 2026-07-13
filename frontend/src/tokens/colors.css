@@ -1,0 +1,34 @@
+:root {
+  --bg: #f7f3ea;
+  --surface: #fffdf8;
+  --ink: #2b2620;
+  --muted: #6f675c;
+  --line: #ddd5c6;
+  --line-strong: #2b2620;
+  --vermilion: #b5432e;
+  --vermilion-soft: #f0ddd5;
+  --vermilion-deep: #8c3122;
+  --ink-90: #3b352d;
+  --ink-fill: #efeadf;
+  --ink-fill-2: #e7e1d3;
+  --ink-wash: #f2eee4;
+  --ok: #55704f;
+  --ok-soft: #e4e9df;
+  --warn: #9b7a35;
+  --warn-soft: #f2ead6;
+  --green: var(--ok);
+  --green-soft: var(--ok-soft);
+  --green-strong: #46603f;
+  --clay: var(--vermilion);
+  --clay-soft: var(--vermilion-soft);
+  --clay-deep: var(--vermilion-deep);
+  --blue: var(--muted);
+  --blue-soft: var(--ink-fill);
+  --blue-deep: var(--ink-90);
+  --yellow: var(--warn);
+  --font-display: var(--serif);
+  --font-heavy: var(--serif-heavy);
+  --font-body: var(--serif);
+  --font-reading: var(--serif);
+  --font-caption: var(--mono);
+}

@@ -189,6 +189,25 @@ export async function generateFollowUp({ question, answer, contentText }) {
   return extractJson(content);
 }
 
+export async function generatePracticeFollowUp({ practiceQuestion, attempt, contentText, contextType, contextText }) {
+  const content = await callChat([
+    { role: "system", content: baseSystemPrompt },
+    {
+      role: "user",
+      content: `你正在回答学生对一道练习题评阅结果的追问。
+${userContentBlock("题目", practiceQuestion.content_text)}
+${userContentBlock("参考答案", practiceQuestion.official_answer_text || "")}
+${userContentBlock("学生作答", attempt?.answer_text || "")}
+${userContentBlock("评阅反馈", attempt ? JSON.stringify({ feedback_text: attempt.feedback_text, step_breakdown: attempt.step_breakdown, next_action: attempt.next_action }) : "")}
+追问位置：${contextType || "analysis"}
+${userContentBlock("选中或关联内容", contextText || "")}
+${userContentBlock("学生追问", contentText)}
+请紧扣被选中的内容回答，避免重复整篇解析。只返回 JSON：{"reply_text":"简洁、可继续追问的回答，数学公式使用 LaTeX"}`
+    }
+  ], 0, { maxTokens: 1200 });
+  return extractJson(content);
+}
+
 export async function evaluatePracticeAttempt({ practiceQuestion, answerText, canonicalTags = [] }) {
   const schema = `{
     "is_correct": false,
@@ -220,7 +239,7 @@ ${canonicalTagHint(canonicalTags)}
 当提供了明确参考答案时，应以它为准；若学生所选选项与参考答案一致，不能把该选项判为错误。
 只返回 JSON，形状必须是：${schema}`
     }
-  ]);
+  ], 0, { maxTokens: 1600 });
 
   return extractJson(content);
 }

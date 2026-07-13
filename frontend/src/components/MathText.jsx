@@ -16,17 +16,28 @@ function renderFormula(source, displayMode) {
   }
 }
 
+export function normalizeMathText(value) {
+  return String(value || "")
+    .replace(/＄/g, "$")
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, formula) => `$$${formula}$$`)
+    .replace(/\\\(([^\n]*?)\\\)/g, (_match, formula) => `$${formula}$`)
+    .replace(/([\u{1D400}-\u{1D7FF}])\1/gu, "$1")
+    .replace(/[\u{1D400}-\u{1D7FF}]/gu, (character) => character.normalize("NFKD"))
+    .replace(/\uFFFD/g, "□");
+}
+
 export function MathText({ text }) {
   if (!text) return null;
+  const normalizedText = normalizeMathText(text);
 
   const parts = [];
   const pattern = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g;
   let lastIndex = 0;
   let match;
 
-  while ((match = pattern.exec(text)) !== null) {
+  while ((match = pattern.exec(normalizedText)) !== null) {
     if (match.index > lastIndex) {
-      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
+      parts.push({ type: "text", value: normalizedText.slice(lastIndex, match.index) });
     }
     const raw = match[0];
     const display = raw.startsWith("$$");
@@ -38,8 +49,8 @@ export function MathText({ text }) {
     lastIndex = match.index + raw.length;
   }
 
-  if (lastIndex < text.length) {
-    parts.push({ type: "text", value: text.slice(lastIndex) });
+  if (lastIndex < normalizedText.length) {
+    parts.push({ type: "text", value: normalizedText.slice(lastIndex) });
   }
 
   return (

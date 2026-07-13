@@ -1,0 +1,19 @@
+@font-face {
+  font-family: "Songti SC";
+  src: local("Songti SC"), local("SongtiSC"), local("STSong"), local("SimSun");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --serif: "Times New Roman", Times, "Songti SC", "SimSun", "STSong", "Noto Serif SC", serif;
+  --serif-heavy: "Songti SC", "SimSun", "STSong", "Noto Serif SC", serif;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --text-display-xl: clamp(44px, 6vw, 76px);
+  --text-display-lg: clamp(40px, 5vw, 64px);
+  --text-h2: 30px;
+  --text-h3: 22px;
+  --leading-reading: 2.05;
+  --leading-body: 1.85;
+}

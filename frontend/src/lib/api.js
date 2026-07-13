@@ -14,7 +14,10 @@ export async function apiRequest(path, options = {}) {
 
   const payload = await response.json().catch(() => null);
   if (!payload || typeof payload.success !== "boolean") {
-    throw new Error("接口返回格式不符合约定。");
+    if (!response.ok) {
+      throw new Error(`后端服务暂不可用（HTTP ${response.status}），请确认后端 API 已启动。`);
+    }
+    throw new Error("接口返回格式不符合约定，请检查前后端服务地址。");
   }
 
   if (!payload.success) {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { apiRequest } from "../lib/api.js";
 import { toast } from "sonner";
+import MountainMark from "./MountainMark.jsx";
 
 const grades = ["高一", "高二", "高三"];
 
@@ -30,8 +31,17 @@ export default function AuthPanel({ onSignedIn }) {
 
   return (
     <main className="auth-shell">
+      <section className="auth-brand" aria-label="Studyoo 产品理念">
+        <p className="auth-brand-label">STUDYOO · 学有</p>
+        <div className="seal">有</div>
+        <div className="auth-brand-copy">
+          <h1>真正的学习，<br />不是获得更多答案，<br />而是建立更深的理解。</h1>
+          <p>先独立作答，再让 AI 评阅、订正、复盘。每一次练习，都沉淀成属于你的能力地图。</p>
+        </div>
+        <MountainMark dark />
+      </section>
       <section className="auth-card">
-        <p className="eyebrow">Studyoo</p>
+        <p className="eyebrow">{mode === "login" ? "欢迎回来" : "创建账号"}</p>
         <h1>让每一套题，都成为你的能力地图</h1>
         <form onSubmit={submit} className="stack">
           <div className="segmented">

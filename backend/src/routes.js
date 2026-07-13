@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import bcrypt from "bcryptjs";
@@ -29,6 +29,7 @@ import {
   evaluatePracticeAttempt,
   generateAnswer,
   generateFollowUp,
+  generatePracticeFollowUp,
   generateFullSolution,
   generateLearningPath,
   recognizeQuestionImage,
@@ -88,12 +89,16 @@ function requireString(value, label) {
 
 function collectionRow(collectionId, userId) {
   return db.prepare(`
-    SELECT c.*, COUNT(cq.exam_question_id) AS question_count
+    SELECT c.*, COUNT(cq.exam_question_id) AS question_count,
+      EXISTS(
+        SELECT 1 FROM practice_sessions ps
+        WHERE ps.collection_id = c.id AND ps.user_id = ? AND ps.status = 'completed'
+      ) AS is_completed
     FROM question_collections c
     LEFT JOIN collection_questions cq ON cq.collection_id = c.id
     WHERE c.id = ? AND (c.user_id = ? OR c.user_id IS NULL)
     GROUP BY c.id
-  `).get(collectionId, userId);
+  `).get(userId, collectionId, userId);
 }
 
 function createCollection({ userId, title, description, subject, creationMode, coverStyle, sourcePaperId, questionIds }) {
@@ -118,6 +123,47 @@ function createCollection({ userId, title, description, subject, creationMode, c
     throw error;
   }
   return toQuestionCollection(collectionRow(collectionId, userId));
+}
+
+function evaluationCacheKey(practiceQuestion, answerText) {
+  const normalizedAnswer = answerText.trim().replace(/\s+/g, " ").toLocaleLowerCase("zh-CN");
+  const answerHash = createHash("sha256").update(normalizedAnswer).digest("hex");
+  const questionVersion = createHash("sha256").update(JSON.stringify({
+    content_text: practiceQuestion.content_text,
+    official_answer_text: practiceQuestion.official_answer_text,
+    knowledge_tags: practiceQuestion.knowledge_tags
+  })).digest("hex").slice(0, 16);
+  return { answerHash, cacheKey: `${practiceQuestion.id}:${questionVersion}:${answerHash}` };
+}
+
+async function evaluatePracticeWithCache({ userId, practiceQuestion, answerText }) {
+  const { answerHash, cacheKey } = evaluationCacheKey(practiceQuestion, answerText);
+  const cached = db.prepare("SELECT evaluation_json FROM practice_evaluation_cache WHERE cache_key = ?").get(cacheKey);
+  if (cached) {
+    const evaluation = parseJson(cached.evaluation_json, null);
+    if (evaluation) {
+      db.prepare("UPDATE practice_evaluation_cache SET hit_count = hit_count + 1, last_used_at = ? WHERE cache_key = ?")
+        .run(nowIso(), cacheKey);
+      return { evaluation, fromCache: true };
+    }
+  }
+
+  ensureAiConfigured();
+  const evaluation = await withAiQuota(userId, () => evaluatePracticeAttempt({
+    practiceQuestion,
+    answerText,
+    canonicalTags: canonicalTagsForSubject(practiceQuestion.subject)
+  }));
+  const createdAt = nowIso();
+  db.prepare(`
+    INSERT INTO practice_evaluation_cache (
+      cache_key, practice_question_id, answer_hash, evaluation_json, hit_count, created_at, last_used_at
+    ) VALUES (?, ?, ?, ?, 0, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      evaluation_json = excluded.evaluation_json,
+      last_used_at = excluded.last_used_at
+  `).run(cacheKey, practiceQuestion.id, answerHash, JSON.stringify(evaluation), createdAt, createdAt);
+  return { evaluation, fromCache: false };
 }
 
 function practiceWeakTags(userId) {
@@ -572,13 +618,17 @@ router.get("/exam/ingestion/jobs", requireAuth, (_req, res) => {
 
 router.get("/collections", requireAuth, (req, res) => {
   const rows = db.prepare(`
-    SELECT c.*, COUNT(cq.exam_question_id) AS question_count
+    SELECT c.*, COUNT(cq.exam_question_id) AS question_count,
+      EXISTS(
+        SELECT 1 FROM practice_sessions ps
+        WHERE ps.collection_id = c.id AND ps.user_id = ? AND ps.status = 'completed'
+      ) AS is_completed
     FROM question_collections c
     LEFT JOIN collection_questions cq ON cq.collection_id = c.id
     WHERE c.user_id = ? OR c.user_id IS NULL
     GROUP BY c.id
     ORDER BY c.created_at DESC, c.title
-  `).all(req.user.id);
+  `).all(req.user.id, req.user.id);
   res.json(ok({ items: rows.map(toQuestionCollection) }));
 });
 
@@ -593,6 +643,41 @@ router.get("/collections/:collectionId", requireAuth, (req, res) => {
     ORDER BY cq.position
   `).all(collection.id);
   res.json(ok({ collection: toQuestionCollection(collection), questions: questions.map(toExamQuestion) }));
+});
+
+router.patch("/collections/:collectionId", requireAuth, (req, res) => {
+  const collection = db.prepare("SELECT * FROM question_collections WHERE id = ? AND user_id = ?").get(req.params.collectionId, req.user.id);
+  if (!collection) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到可编辑的个人题库。");
+  const title = typeof req.body.title === "string" ? req.body.title.trim() : collection.title;
+  const description = typeof req.body.description === "string" ? req.body.description.trim() : collection.description;
+  const coverStyle = ["mint", "blue", "clay", "ink"].includes(req.body.cover_style) ? req.body.cover_style : collection.cover_style;
+  if (!title) throw new AppError(400, "VALIDATION_ERROR", "题库名称不能为空。");
+  db.prepare("UPDATE question_collections SET title = ?, description = ?, cover_style = ? WHERE id = ?")
+    .run(title, description, coverStyle, collection.id);
+  res.json(ok(toQuestionCollection(collectionRow(collection.id, req.user.id))));
+});
+
+router.delete("/collections/:collectionId", requireAuth, (req, res) => {
+  const collection = db.prepare("SELECT * FROM question_collections WHERE id = ? AND user_id = ?").get(req.params.collectionId, req.user.id);
+  if (!collection) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到可删除的个人题库。");
+  const completedCount = db.prepare(`
+    SELECT COUNT(*) AS cnt FROM practice_sessions
+    WHERE collection_id = ? AND user_id = ? AND status = 'completed'
+  `).get(collection.id, req.user.id).cnt;
+  if (completedCount > 0) {
+    throw new AppError(409, "VALIDATION_ERROR", "这份题库已有完成记录，为保留学习数据不能删除。");
+  }
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM practice_sessions WHERE collection_id = ?").run(collection.id);
+    db.prepare("DELETE FROM collection_questions WHERE collection_id = ?").run(collection.id);
+    db.prepare("DELETE FROM question_collections WHERE id = ?").run(collection.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  res.json(ok({ id: collection.id }));
 });
 
 router.post("/collections", requireAuth, (req, res) => {
@@ -666,11 +751,22 @@ router.post("/collections/:collectionId/sessions", requireAuth, (req, res) => {
   const collection = collectionRow(req.params.collectionId, req.user.id);
   if (!collection) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这个题库。");
   const sessionId = randomUUID();
+  const gradingMode = req.body.grading_mode === "unified" ? "unified" : "individual";
   db.prepare(`
-    INSERT INTO practice_sessions (id, user_id, collection_id, status, current_position, started_at)
-    VALUES (?, ?, ?, 'active', 0, ?)
-  `).run(sessionId, req.user.id, collection.id, nowIso());
-  res.json(ok({ id: sessionId, collection_id: collection.id, status: "active", current_position: 0 }));
+    INSERT INTO practice_sessions (id, user_id, collection_id, status, current_position, started_at, grading_mode)
+    VALUES (?, ?, ?, 'active', 0, ?, ?)
+  `).run(sessionId, req.user.id, collection.id, nowIso(), gradingMode);
+  res.json(ok({ id: sessionId, collection_id: collection.id, status: "active", current_position: 0, grading_mode: gradingMode }));
+});
+
+router.patch("/practice/sessions/:sessionId/complete", requireAuth, (req, res) => {
+  const session = db.prepare("SELECT * FROM practice_sessions WHERE id = ? AND user_id = ?")
+    .get(req.params.sessionId, req.user.id);
+  if (!session) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这次练习记录。");
+  const completedAt = nowIso();
+  db.prepare("UPDATE practice_sessions SET status = 'completed', completed_at = ? WHERE id = ?")
+    .run(completedAt, session.id);
+  res.json(ok({ id: session.id, status: "completed", completed_at: completedAt }));
 });
 
 router.get("/practice/questions/current", requireAuth, (req, res) => {
@@ -749,15 +845,13 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
     throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
   }
 
-  ensureAiConfigured();
   const evaluationQuestion = toPracticeQuestion(questionRow, { includeAnswer: true });
-  const evaluation = await withAiQuota(req.user.id, () =>
-    evaluatePracticeAttempt({
-      practiceQuestion: evaluationQuestion,
-      answerText,
-      canonicalTags: canonicalTagsForSubject(evaluationQuestion.subject)
-    })
-  );
+  const evaluationStartedAt = Date.now();
+  const { evaluation, fromCache } = await evaluatePracticeWithCache({
+    userId: req.user.id,
+    practiceQuestion: evaluationQuestion,
+    answerText
+  });
 
   const attemptId = randomUUID();
   const stepBreakdown = Array.isArray(evaluation.step_breakdown) ? evaluation.step_breakdown : [];
@@ -768,8 +862,8 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
   db.prepare(`
     INSERT INTO practice_attempts (
       id, user_id, practice_question_id, answer_text, is_correct, score,
-      feedback_text, step_breakdown_json, next_action, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      feedback_text, step_breakdown_json, next_action, created_at, from_cache
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     attemptId,
     req.user.id,
@@ -780,7 +874,8 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
     evaluation.feedback_text || "这次作答已完成评阅。",
     JSON.stringify(stepBreakdown),
     evaluation.next_action || "复盘本道题的关键步骤后，再独立重做一遍。",
-    createdAt
+    createdAt,
+    fromCache ? 1 : 0
   );
 
   if (!isCorrect) {
@@ -819,7 +914,37 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
   }
 
   const attempt = toPracticeAttempt(db.prepare("SELECT * FROM practice_attempts WHERE id = ?").get(attemptId));
-  res.json(ok({ question: evaluationQuestion, attempt }));
+  res.json(ok({ question: evaluationQuestion, attempt, cached: fromCache, elapsed_ms: Date.now() - evaluationStartedAt }));
+}));
+
+router.post("/practice/questions/:questionId/follow-up", requireAuth, asyncRoute(async (req, res) => {
+  const contentText = requireString(req.body.content_text, "追问内容");
+  const questionRow = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)")
+    .get(req.params.questionId, req.user.id);
+  if (!questionRow) throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
+  const attemptRow = typeof req.body.attempt_id === "string"
+    ? db.prepare("SELECT * FROM practice_attempts WHERE id = ? AND user_id = ? AND practice_question_id = ?")
+      .get(req.body.attempt_id, req.user.id, questionRow.id)
+    : null;
+  const attempt = attemptRow ? toPracticeAttempt(attemptRow) : null;
+  const contextType = ["question", "feedback", "step", "answer", "analysis"].includes(req.body.context_type)
+    ? req.body.context_type
+    : "analysis";
+  const contextText = typeof req.body.context_text === "string" ? req.body.context_text.trim().slice(0, 3000) : "";
+
+  ensureAiConfigured();
+  const practiceQuestion = toPracticeQuestion(questionRow, { includeAnswer: true });
+  const reply = await withAiQuota(req.user.id, () => generatePracticeFollowUp({
+    practiceQuestion, attempt, contentText, contextType, contextText
+  }));
+  const id = randomUUID();
+  const createdAt = nowIso();
+  db.prepare(`
+    INSERT INTO practice_follow_ups (
+      id, user_id, practice_question_id, attempt_id, context_type, context_text, content_text, reply_text, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, req.user.id, questionRow.id, attempt?.id || null, contextType, contextText, contentText, reply.reply_text, createdAt);
+  res.json(ok({ id, reply_text: reply.reply_text, context_type: contextType, context_text: contextText, created_at: createdAt }));
 }));
 
 router.post("/questions", requireAuth, asyncRoute(async (req, res) => {

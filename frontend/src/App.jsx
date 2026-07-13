@@ -10,6 +10,7 @@ import LibraryPage from "./pages/LibraryPage.jsx";
 import PracticePage from "./pages/PracticePage.jsx";
 import QuestionParser from "./pages/QuestionParser.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
+import TodayPage from "./pages/TodayPage.jsx";
 import ImportPage from "./pages/ImportPage.jsx";
 import ReviewPage from "./pages/ReviewPage.jsx";
 import "./styles.css";
@@ -34,8 +35,8 @@ function AppHeader({ user }) {
       <nav className="main-nav" aria-label="主导航">
         <button className={currentPage === "" || currentPage === "home" ? "active" : ""} onClick={() => navigate("/")}>首页</button>
         <button className={currentPage === "library" ? "active" : ""} onClick={() => navigate("/library")}>题库</button>
-        <button className={currentPage === "parser" ? "active" : ""} onClick={() => navigate("/parser")}>题目解析</button>
-        <button className={currentPage === "profile" ? "active" : ""} onClick={() => navigate("/profile")}>个人</button>
+        <button className={currentPage === "today" ? "active" : ""} onClick={() => navigate("/today")}>今日</button>
+        <button className={currentPage === "parser" ? "active" : ""} onClick={() => navigate("/parser")}>解析</button>
       </nav>
       <button className="profile-chip" onClick={() => navigate("/profile")}><span>{user.nickname.slice(0, 1).toUpperCase()}</span><strong>{user.nickname}</strong></button>
     </header>
@@ -43,15 +44,19 @@ function AppHeader({ user }) {
 }
 
 function AppContent({ user, onUserUpdated, onLogout }) {
+  const location = useLocation();
+  const immersive = location.pathname.startsWith("/practice/") || location.pathname.startsWith("/review/");
+
   return (
-    <div className="app-shell">
-      <AppHeader user={user} />
+    <div className={`app-shell${immersive ? " immersive-shell" : ""}`}>
+      {!immersive && <AppHeader user={user} />}
       <div className="app-content">
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/practice/:id" element={<PracticePage />} />
           <Route path="/parser" element={<QuestionParser />} />
+          <Route path="/today" element={<TodayPage />} />
           <Route path="/profile" element={<ProfilePage user={user} onUserUpdated={onUserUpdated} onLogout={onLogout} />} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/review/:taskId" element={<ReviewPage />} />

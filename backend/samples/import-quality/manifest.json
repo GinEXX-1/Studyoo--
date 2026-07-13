@@ -1,0 +1,16 @@
+{
+  "samples": [
+    {
+      "id": "2026-national-1-math-recall",
+      "source_names": [
+        "2026全国1(山东,广东,湖南,湖北,河北,江苏,福建,浙江,河南,江西,安徽).pdf",
+        "2026-national-1.pdf"
+      ],
+      "subject": "数学",
+      "expected_pages": 5,
+      "expected_question_numbers": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+      "minimum_coverage": 0.95,
+      "maximum_duplicate_rate": 0
+    }
+  ]
+}
