@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS review_tasks (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+/* 拍照上传的题目图片（归属绑定 + 保存 AI 原始识别结果作为未来微调语料） */
+CREATE TABLE IF NOT EXISTS photo_uploads (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  image_url TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  ai_result_json TEXT,
+  confirmed_question_id TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_review_tasks_user ON review_tasks(user_id, status, scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_import_tasks_user ON import_tasks(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_candidates_task ON question_candidates(task_id, review_status);
@@ -130,6 +142,8 @@ ensureColumn("import_tasks", "title", "TEXT");
 ensureColumn("import_tasks", "year", "INTEGER");
 // 老库补列：含图标记（几何图/函数图像/图表等，无法用文字完整转写）
 ensureColumn("question_candidates", "has_figure", "INTEGER NOT NULL DEFAULT 0");
+// 人工首次校对前的 AI 原始识别快照——"识别纠错对"是未来微调最值钱的语料，现在开始囤
+ensureColumn("question_candidates", "ai_snapshot_json", "TEXT");
 
 // v2.1：PDF 原文不再存数据库（uploads 目录已有原始文件），清空历史遗留的 base64 副本。
 db.exec("UPDATE import_tasks SET pdf_data_base64 = NULL WHERE pdf_data_base64 IS NOT NULL");

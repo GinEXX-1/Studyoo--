@@ -28,16 +28,20 @@ export function authorizeUpload(req, res, next) {
     UNION ALL
     SELECT 1 FROM exam_questions q
     JOIN exam_papers p ON p.id = q.paper_id
-    WHERE q.content_image_url = ? AND (p.owner_user_id IS NULL OR p.owner_user_id = ?)
+    WHERE q.content_image_url = ? AND (p.owner_user_id IS NULL OR p.owner_user_id = ? OR p.is_shared = 1)
     UNION ALL
     SELECT 1 FROM practice_questions
-    WHERE content_image_url = ? AND (owner_user_id IS NULL OR owner_user_id = ?)
+    WHERE content_image_url = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
+    UNION ALL
+    SELECT 1 FROM photo_uploads
+    WHERE image_url = ? AND user_id = ?
     LIMIT 1
   `).get(
     fileName, userId,
     resourceUrl, userId,
     resourceUrl, userId,
     resourceUrl, resourceUrl, userId,
+    resourceUrl, userId,
     resourceUrl, userId,
     resourceUrl, userId
   );

@@ -44,7 +44,7 @@ export const router = express.Router();
 // 可见性规则：公共资源（owner_user_id 为 NULL 的种子/官方内容）+ 自己导入的资源。
 function accessiblePaper(paperId, userId) {
   return db.prepare(
-    "SELECT * FROM exam_papers WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)"
+    "SELECT * FROM exam_papers WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)"
   ).get(paperId, userId);
 }
 
@@ -52,7 +52,7 @@ function accessibleExamQuestion(questionId, userId) {
   return db.prepare(`
     SELECT q.* FROM exam_questions q
     JOIN exam_papers p ON p.id = q.paper_id
-    WHERE q.id = ? AND (p.owner_user_id IS NULL OR p.owner_user_id = ?)
+    WHERE q.id = ? AND (p.owner_user_id IS NULL OR p.owner_user_id = ? OR p.is_shared = 1)
   `).get(questionId, userId);
 }
 
@@ -90,15 +90,16 @@ function requireString(value, label) {
 function collectionRow(collectionId, userId) {
   return db.prepare(`
     SELECT c.*, COUNT(cq.exam_question_id) AS question_count,
+      (c.user_id = ?) AS is_owner,
       EXISTS(
         SELECT 1 FROM practice_sessions ps
         WHERE ps.collection_id = c.id AND ps.user_id = ? AND ps.status = 'completed'
       ) AS is_completed
     FROM question_collections c
     LEFT JOIN collection_questions cq ON cq.collection_id = c.id
-    WHERE c.id = ? AND (c.user_id = ? OR c.user_id IS NULL)
+    WHERE c.id = ? AND (c.user_id = ? OR c.user_id IS NULL OR c.is_shared = 1)
     GROUP BY c.id
-  `).get(userId, collectionId, userId);
+  `).get(userId, userId, collectionId, userId);
 }
 
 function createCollection({ userId, title, description, subject, creationMode, coverStyle, sourcePaperId, questionIds }) {
@@ -362,8 +363,8 @@ router.get("/profile/stats", requireAuth, (req, res) => {
 router.get("/exam/papers", requireAuth, (req, res) => {
   const subject = typeof req.query.subject === "string" ? req.query.subject : null;
   const rows = subject
-    ? db.prepare("SELECT * FROM exam_papers WHERE subject = ? AND (owner_user_id IS NULL OR owner_user_id = ?) ORDER BY year DESC, created_at DESC").all(subject, req.user.id)
-    : db.prepare("SELECT * FROM exam_papers WHERE owner_user_id IS NULL OR owner_user_id = ? ORDER BY year DESC, created_at DESC").all(req.user.id);
+    ? db.prepare("SELECT * FROM exam_papers WHERE subject = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1) ORDER BY year DESC, created_at DESC").all(subject, req.user.id)
+    : db.prepare("SELECT * FROM exam_papers WHERE owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1 ORDER BY year DESC, created_at DESC").all(req.user.id);
   res.json(ok({ items: rows.map(toExamPaper) }));
 });
 
@@ -626,16 +627,17 @@ router.get("/exam/ingestion/jobs", requireAuth, (_req, res) => {
 router.get("/collections", requireAuth, (req, res) => {
   const rows = db.prepare(`
     SELECT c.*, COUNT(cq.exam_question_id) AS question_count,
+      (c.user_id = ?) AS is_owner,
       EXISTS(
         SELECT 1 FROM practice_sessions ps
         WHERE ps.collection_id = c.id AND ps.user_id = ? AND ps.status = 'completed'
       ) AS is_completed
     FROM question_collections c
     LEFT JOIN collection_questions cq ON cq.collection_id = c.id
-    WHERE c.user_id = ? OR c.user_id IS NULL
+    WHERE c.user_id = ? OR c.user_id IS NULL OR c.is_shared = 1
     GROUP BY c.id
     ORDER BY c.created_at DESC, c.title
-  `).all(req.user.id, req.user.id);
+  `).all(req.user.id, req.user.id, req.user.id);
   res.json(ok({ items: rows.map(toQuestionCollection) }));
 });
 
@@ -667,12 +669,13 @@ router.patch("/collections/:collectionId", requireAuth, (req, res) => {
 router.delete("/collections/:collectionId", requireAuth, (req, res) => {
   const collection = db.prepare("SELECT * FROM question_collections WHERE id = ? AND user_id = ?").get(req.params.collectionId, req.user.id);
   if (!collection) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到可删除的个人题库。");
+  // 不限定 user_id：共享题库可能已被他人练习，删除会连带清掉他人的学习记录
   const completedCount = db.prepare(`
     SELECT COUNT(*) AS cnt FROM practice_sessions
-    WHERE collection_id = ? AND user_id = ? AND status = 'completed'
-  `).get(collection.id, req.user.id).cnt;
+    WHERE collection_id = ? AND status = 'completed'
+  `).get(collection.id).cnt;
   if (completedCount > 0) {
-    throw new AppError(409, "VALIDATION_ERROR", "这份题库已有完成记录，为保留学习数据不能删除。");
+    throw new AppError(409, "VALIDATION_ERROR", "这份题库已有完成记录（可能包含其他同学的），为保留学习数据不能删除。");
   }
   db.exec("BEGIN");
   try {
@@ -687,6 +690,36 @@ router.delete("/collections/:collectionId", requireAuth, (req, res) => {
   res.json(ok({ id: collection.id }));
 });
 
+// ——— 共享题库开关（仅 owner）———
+// 共享 = 题库对全体用户可见可练；同步共享底层试卷与练习题，保证做题链路可访问。
+// 版权红线：仅限自己创作或有权分享的内容；发现侵权内容 owner 有义务取消共享。
+router.patch("/collections/:collectionId/share", requireAuth, (req, res) => {
+  const collection = db.prepare("SELECT * FROM question_collections WHERE id = ? AND user_id = ?")
+    .get(req.params.collectionId, req.user.id);
+  if (!collection) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到可操作的个人题库。");
+  const shared = req.body.shared === true ? 1 : 0;
+
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE question_collections SET is_shared = ? WHERE id = ?").run(shared, collection.id);
+    if (collection.source_paper_id) {
+      db.prepare("UPDATE exam_papers SET is_shared = ? WHERE id = ? AND owner_user_id = ?")
+        .run(shared, collection.source_paper_id, req.user.id);
+    }
+    db.prepare(`
+      UPDATE practice_questions SET is_shared = ?
+      WHERE owner_user_id = ? AND exam_question_id IN (
+        SELECT exam_question_id FROM collection_questions WHERE collection_id = ?
+      )
+    `).run(shared, req.user.id, collection.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  res.json(ok(toQuestionCollection(collectionRow(collection.id, req.user.id))));
+});
+
 router.post("/collections", requireAuth, (req, res) => {
   const title = requireString(req.body.title, "题库名称");
   const questionIds = Array.isArray(req.body.question_ids) ? [...new Set(req.body.question_ids.filter((id) => typeof id === "string"))] : [];
@@ -695,7 +728,7 @@ router.post("/collections", requireAuth, (req, res) => {
   const existing = db.prepare(`
     SELECT q.id FROM exam_questions q
     JOIN exam_papers p ON p.id = q.paper_id
-    WHERE q.id IN (${placeholders}) AND (p.owner_user_id IS NULL OR p.owner_user_id = ?)
+    WHERE q.id IN (${placeholders}) AND (p.owner_user_id IS NULL OR p.owner_user_id = ? OR p.is_shared = 1)
   `).all(...questionIds, req.user.id);
   if (existing.length !== questionIds.length) throw new AppError(400, "VALIDATION_ERROR", "选择的题目中有不存在的记录。");
   const collection = createCollection({
@@ -782,7 +815,7 @@ router.get("/practice/questions/current", requireAuth, (req, res) => {
   let row = afterId
     ? db.prepare(`
         SELECT * FROM practice_questions
-        WHERE subject = ? AND id > ? AND (owner_user_id IS NULL OR owner_user_id = ?)
+        WHERE subject = ? AND id > ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
         ORDER BY id ASC
         LIMIT 1
       `).get(subject, afterId, req.user.id)
@@ -791,7 +824,7 @@ router.get("/practice/questions/current", requireAuth, (req, res) => {
   if (!row) {
     row = db.prepare(`
       SELECT * FROM practice_questions
-      WHERE subject = ? AND (owner_user_id IS NULL OR owner_user_id = ?)
+      WHERE subject = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
       ORDER BY id ASC
       LIMIT 1
     `).get(subject, req.user.id);
@@ -815,7 +848,7 @@ router.get("/practice/questions/current", requireAuth, (req, res) => {
 });
 
 router.get("/practice/questions/:questionId", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)")
+  const row = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
     .get(req.params.questionId, req.user.id);
   if (!row) {
     return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
@@ -846,7 +879,7 @@ router.get("/practice/attempts", requireAuth, (req, res) => {
 
 router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(async (req, res) => {
   const answerText = requireString(req.body.answer_text, "你的作答");
-  const questionRow = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)")
+  const questionRow = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
     .get(req.params.questionId, req.user.id);
   if (!questionRow) {
     throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
@@ -926,7 +959,7 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
 
 router.post("/practice/questions/:questionId/follow-up", requireAuth, asyncRoute(async (req, res) => {
   const contentText = requireString(req.body.content_text, "追问内容");
-  const questionRow = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)")
+  const questionRow = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
     .get(req.params.questionId, req.user.id);
   if (!questionRow) throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
   const attemptRow = typeof req.body.attempt_id === "string"

@@ -237,6 +237,16 @@ ${canonicalTagHint(canonicalTags)}
 
 请判断学生答案是否基本正确，给 0-100 分，并指出思路缺口。所有数学表达式必须使用 LaTeX。
 当提供了明确参考答案时，应以它为准；若学生所选选项与参考答案一致，不能把该选项判为错误。
+
+评分锚点（必须对照打分，避免忽严忽宽）：
+- 90-100：结论正确，过程完整且关键步骤都有依据。
+- 80-89：结论正确，过程有小瑕疵（跳步、表述不严谨、单位遗漏等）。
+- 60-79：思路方向正确，但有实质缺陷（计算错误、漏一种情况、关键一步说不清）。
+- 40-59：只有部分正确思路，未走通主线。
+- 0-39：方向错误、答非所问或几乎空白。
+- 选择题：所选选项与参考答案一致时至少 80 分，理由充分则 90+；选项错误时不超过 59 分。
+- is_correct 当且仅当 score >= 80。
+- 学生只写结论没有过程时：结论正确给 70-79 并在 next_action 要求补过程，结论错误按 0-39 处理。
 只返回 JSON，形状必须是：${schema}`
     }
   ], 0, { maxTokens: 1600 });
@@ -411,6 +421,48 @@ ${canonicalTagHint(canonicalTags)}
     }
   ], 1, { model: config.aiVisionModel, maxTokens: 2000 });
   return extractJson(content);
+}
+
+// ——— 拍照导入题库：识别手机拍摄的单道题 ———
+export async function recognizePhotoQuestion({ subject, imageDataUrl, canonicalTags = [] }) {
+  const schema = `{
+    "stem_text": "题干全文（含公式 LaTeX）",
+    "options": [{"label": "A", "content": "选项内容"}],
+    "reference_answer_text": "参考答案（若照片中标注，否则 null）",
+    "knowledge_tags": ["知识点"],
+    "difficulty": "easy|medium|hard",
+    "question_type": "choice|fill-in-blank|short-answer",
+    "has_figure": false,
+    "confidence": 0.9
+  }`;
+
+  const content = await callChat([
+    { role: "system", content: baseSystemPrompt },
+    {
+      role: "user",
+      content: [
+        { type: "image_url", image_url: { url: imageDataUrl } },
+        {
+          type: "text",
+          text: `图片是学生手机拍摄的一道${subject}题（可能有透视变形、阴影或手写笔迹）。请识别照片中最完整的那一道题。
+${canonicalTagHint(canonicalTags)}
+
+要求：
+1. 忠实转写印刷的题干和选项，公式用 LaTeX；忽略手写的演算、勾划和批注。
+2. 照片边缘混入相邻题目的残余内容时忽略它们。
+3. has_figure：题目含无法用文字完整表达的图形（几何图/函数图像/图表/装置图等）设为 true，否则 false。
+4. confidence 表示识别完整度（0-1）；照片模糊、题目被截断时给 0.6 以下。
+5. 看不清的内容不要凭空编造，在对应位置用 [模糊] 标记。
+
+只返回 JSON，形状必须是：${schema}`
+        }
+      ]
+    }
+  ], 1, { model: config.aiVisionModel, maxTokens: 2000 });
+  const result = extractJson(content);
+  if (!Array.isArray(result.options)) result.options = [];
+  if (!Array.isArray(result.knowledge_tags)) result.knowledge_tags = [];
+  return result;
 }
 
 export async function recognizeQuestionImage({ subject, imageDataUrl, canonicalTags = [] }) {

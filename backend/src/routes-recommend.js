@@ -199,7 +199,7 @@ recommendRouter.get("/recommend/questions", requireAuth, (req, res) => {
     const items = db.prepare(`
       SELECT id, subject, title, difficulty, knowledge_tags_json
       FROM practice_questions
-      WHERE owner_user_id IS NULL OR owner_user_id = ?
+      WHERE owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1
       ORDER BY RANDOM()
       LIMIT 5
     `).all(req.user.id).map((row) => ({
@@ -215,7 +215,7 @@ recommendRouter.get("/recommend/questions", requireAuth, (req, res) => {
   const rows = db.prepare(`
     SELECT id, subject, title, content_text, difficulty, knowledge_tags_json, content_image_url
     FROM practice_questions
-    WHERE subject = ? AND knowledge_tags_json LIKE ? AND (owner_user_id IS NULL OR owner_user_id = ?)
+    WHERE subject = ? AND knowledge_tags_json LIKE ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
     ORDER BY difficulty ASC, RANDOM()
     LIMIT 5
   `).all(subject, `%${knowledgeTag}%`, req.user.id);

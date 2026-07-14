@@ -728,3 +728,38 @@ Studyoo 的界面应像一份可交互的学习期刊：理性、温暖、安静
 |GET /mistakes/stats|[ ]|[ ]|[ ]|
 |GET /learning-path|[ ]|[ ]|[ ]|
 |PATCH /learning-path/{id}|[ ]|[ ]|[ ]|
+
+---
+
+## 附录 C：v2.2 新增接口（拍照导入 / 共享题库）
+
+### C.1 拍照识别题目
+`POST /import/pipeline/../import/photo/recognize`（实际路径 `/api/v1/import/photo/recognize`，需登录，消耗 1 次 AI 额度）
+
+请求：`{ "subject": "数学", "image_base64": "<dataURL 或纯 base64，≤10MB>" }`
+
+响应 data：`{ "photo_id", "image_url", "draft": { stem_text, options, reference_answer_text, knowledge_tags, difficulty, question_type, has_figure, confidence } }`
+
+说明：照片与 AI 原始识别结果存入 `photo_uploads` 表（微调语料囤积）；识别失败自动清理照片文件并回滚配额。
+
+### C.2 拍照确认入库
+`POST /api/v1/import/photo/confirm`（需登录，不消耗 AI）
+
+请求：`{ "photo_id", "stem_text"(必填), "options", "reference_answer_text", "knowledge_tags", "difficulty", "question_type", "has_figure" }`
+
+行为：入库到该用户的「拍照导入 · 学科」试卷与题库（ID 形如 `collection-photo-<userId>-math`，纯 ASCII）；同一 photo_id 重复确认返回 409。
+
+响应 data：`{ "exam_question_id", "practice_question_id", "collection_id" }`
+
+### C.3 共享题库开关
+`PATCH /api/v1/collections/:collectionId/share`（仅 owner）
+
+请求：`{ "shared": true | false }`
+
+行为：同步设置题库、源试卷、关联练习题的 `is_shared`；共享后对全体用户可见可练，编辑/删除/共享开关仍仅限 owner；已被任何人完成过的题库不可删除。
+
+可见性规则（全局统一）：`owner IS NULL（公共种子） OR owner = 当前用户 OR is_shared = 1`。
+
+### C.4 序列化新增字段
+- 题库（collection）：`is_shared`、`is_owner`
+- 练习题（practice question）：`has_figure`（true 时前端直接展示题目原图）、`is_shared`

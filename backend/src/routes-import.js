@@ -19,7 +19,7 @@ import {
 import { requireAuth } from "./auth.js";
 import { AppError, asyncRoute, fail, ok } from "./http.js";
 import { config } from "./config.js";
-import { ensureAiConfigured, recognizePageQuestions, recognizeSingleQuestion } from "./ai.js";
+import { ensureAiConfigured, recognizePageQuestions, recognizeSingleQuestion, recognizePhotoQuestion } from "./ai.js";
 import { withAiQuota } from "./quota.js";
 import sharp from "sharp";
 import { extractStructuredPdfText } from "./pdf-text.js";
@@ -146,7 +146,7 @@ function cleanupImportFiles(uploadDir, taskId) {
 
 function cleanupUploadUrls(uploadDir, urls) {
   for (const url of urls) {
-    if (typeof url !== "string" || !url.startsWith("/uploads/crop-")) continue;
+    if (typeof url !== "string" || !(url.startsWith("/uploads/crop-") || url.startsWith("/uploads/photo-"))) continue;
     const fileName = url.slice("/uploads/".length);
     if (!/^[A-Za-z0-9._-]+$/.test(fileName)) continue;
     try { unlinkSync(resolve(uploadDir, fileName)); } catch {}
@@ -753,6 +753,21 @@ importRouter.patch("/import/pipeline/candidates/:candidateId", requireAuth, asyn
     throw new AppError(400, "VALIDATION_ERROR", "没有提供可更新的字段。");
   }
 
+  // 首次人工修改前，把 AI 原始识别结果快照下来——"识别纠错对"是未来微调的核心语料
+  if (!candidate.ai_snapshot_json && candidate.recognition_confidence != null) {
+    updates.ai_snapshot_json = JSON.stringify({
+      question_number: candidate.question_number,
+      stem_text: candidate.stem_text,
+      options_json: candidate.options_json,
+      reference_answer_text: candidate.reference_answer_text,
+      knowledge_tags_json: candidate.knowledge_tags_json,
+      difficulty: candidate.difficulty,
+      question_type: candidate.question_type,
+      has_figure: candidate.has_figure,
+      recognition_confidence: candidate.recognition_confidence
+    });
+  }
+
   updates.updated_at = nowIso();
   updates.review_status = "reviewing";
   updates.reviewed_by = req.user.id;
@@ -1241,3 +1256,147 @@ importRouter.get("/import/pipeline/candidates/:candidateId/page-image", requireA
     bbox
   }));
 });
+
+// ——— 13. 拍照导入：识别 ———
+// 上传一张题目照片 → 视觉 AI 识别为结构化草稿（不入库），供前端确认/修改。
+// 照片与 AI 原始结果存入 photo_uploads：归属校验 + 未来微调语料。
+importRouter.post("/import/photo/recognize", requireAuth, asyncRoute(async (req, res) => {
+  ensureAiConfigured();
+  const subject = requireString(req.body.subject || "数学", "学科");
+  const dataBase64 = requireString(req.body.image_base64, "题目照片");
+  const buffer = Buffer.from(dataBase64.replace(/^data:image\/\w+;base64,/, ""), "base64");
+  if (buffer.length === 0 || buffer.length > 10 * 1024 * 1024) {
+    throw new AppError(400, "VALIDATION_ERROR", "请上传不超过 10MB 的题目照片。");
+  }
+
+  const uploadDir = resolve(config.uploadDir);
+  const photoId = randomUUID();
+  const fileName = `photo-${photoId}.jpg`;
+  // 统一转成校正方向后的 JPEG，同时防御伪装成图片的任意文件
+  let normalized;
+  try {
+    normalized = await sharp(buffer).rotate().jpeg({ quality: 90 }).toBuffer();
+  } catch {
+    throw new AppError(400, "VALIDATION_ERROR", "无法读取这张图片，请换一张清晰的题目照片。");
+  }
+  writeFileSync(resolve(uploadDir, fileName), normalized);
+  const imageUrl = `/uploads/${fileName}`;
+
+  let draft;
+  try {
+    draft = await withAiQuota(req.user.id, () => recognizePhotoQuestion({
+      subject,
+      imageDataUrl: `data:image/jpeg;base64,${normalized.toString("base64")}`,
+      canonicalTags: canonicalTagsForSubject(subject)
+    }));
+  } catch (error) {
+    cleanupUploadUrls(uploadDir, [imageUrl]);
+    throw error;
+  }
+
+  db.prepare(`
+    INSERT INTO photo_uploads (id, user_id, image_url, subject, ai_result_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(photoId, req.user.id, imageUrl, subject, JSON.stringify(draft), nowIso());
+
+  res.json(ok({
+    photo_id: photoId,
+    image_url: imageUrl,
+    draft: {
+      stem_text: typeof draft.stem_text === "string" ? draft.stem_text : "",
+      options: draft.options,
+      reference_answer_text: typeof draft.reference_answer_text === "string" ? draft.reference_answer_text : "",
+      knowledge_tags: normalizeKnowledgeTags(subject, draft.knowledge_tags),
+      difficulty: ["easy", "medium", "hard"].includes(draft.difficulty) ? draft.difficulty : "medium",
+      question_type: ["choice", "fill-in-blank", "short-answer"].includes(draft.question_type) ? draft.question_type : "choice",
+      has_figure: Boolean(draft.has_figure),
+      confidence: typeof draft.confidence === "number" ? draft.confidence : 0.7
+    }
+  }));
+}));
+
+// ——— 14. 拍照导入：确认入库 ———
+// 用户校对后的最终稿入库到「拍照导入 · 学科」个人题库；与 AI 原始识别的差异即微调语料。
+importRouter.post("/import/photo/confirm", requireAuth, asyncRoute(async (req, res) => {
+  const photo = db.prepare("SELECT * FROM photo_uploads WHERE id = ? AND user_id = ?")
+    .get(requireString(req.body.photo_id, "照片标识"), req.user.id);
+  if (!photo) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这张题目照片，请重新拍照识别。");
+  if (photo.confirmed_question_id) {
+    throw new AppError(409, "VALIDATION_ERROR", "这张照片已经入库，请不要重复确认。");
+  }
+
+  const stemText = requireString(req.body.stem_text, "题目内容");
+  const subject = photo.subject;
+  const knowledgeTags = normalizeKnowledgeTags(subject, Array.isArray(req.body.knowledge_tags) ? req.body.knowledge_tags : []);
+  const options = Array.isArray(req.body.options) ? req.body.options.filter((o) => o && typeof o.label === "string") : [];
+  const difficulty = ["easy", "medium", "hard"].includes(req.body.difficulty) ? req.body.difficulty : "medium";
+  const questionType = ["choice", "fill-in-blank", "short-answer"].includes(req.body.question_type) ? req.body.question_type : "choice";
+  const answerText = typeof req.body.reference_answer_text === "string" && req.body.reference_answer_text.trim()
+    ? req.body.reference_answer_text.trim()
+    : "拍照导入未附参考答案。提交作答后，AI 将独立推导并给出评阅意见。";
+  const hasFigure = req.body.has_figure === false ? 0 : 1; // 拍照题默认含图（原图就是照片）
+
+  const createdAt = nowIso();
+  const questionId = randomUUID();
+  // ID 只用 ASCII：中文学科名进 URL 会给客户端和工具链埋坑
+  const subjectSlugs = { "数学": "math", "物理": "physics", "化学": "chemistry", "生物": "biology", "语文": "chinese", "英语": "english", "历史": "history", "地理": "geography", "政治": "politics" };
+  const subjectSlug = subjectSlugs[subject] || Buffer.from(subject).toString("hex");
+  const paperId = `paper-photo-${req.user.id}-${subjectSlug}`;
+  const collectionId = `collection-photo-${req.user.id}-${subjectSlug}`;
+  const questionNumber = String(
+    db.prepare("SELECT COUNT(*) AS cnt FROM exam_questions WHERE paper_id = ?").get(paperId).cnt + 1
+  );
+
+  db.exec("BEGIN");
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO exam_papers (
+        id, year, region, subject, title, source_name, source_url, license_note,
+        status, created_at, owner_user_id, import_kind
+      ) VALUES (?, ?, '个人题库', ?, ?, '拍照导入', NULL, '用户拍照上传，仅用于个人学习。', 'draft', ?, ?, 'photo')
+    `).run(paperId, new Date().getFullYear(), subject, `拍照导入 · ${subject}`, createdAt, req.user.id);
+
+    db.prepare(`
+      INSERT OR IGNORE INTO question_collections (
+        id, user_id, title, description, subject, creation_mode, cover_style, source_paper_id, created_at
+      ) VALUES (?, ?, ?, '手机拍照识别并确认入库的题目', ?, 'photo', 'clay', ?, ?)
+    `).run(collectionId, req.user.id, `拍照导入 · ${subject}`, subject, paperId, createdAt);
+
+    db.prepare(`
+      INSERT INTO exam_questions (
+        id, paper_id, question_number, subject, question_type, content_text,
+        official_answer_text, source, knowledge_tags_json, difficulty, status,
+        created_at, content_image_url, source_task_id, has_figure
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '拍照导入', ?, ?, 'needs_profile', ?, ?, NULL, ?)
+    `).run(
+      questionId, paperId, questionNumber, subject, questionType, stemText,
+      answerText, JSON.stringify(knowledgeTags), difficulty, createdAt, photo.image_url, hasFigure
+    );
+
+    db.prepare(`
+      INSERT INTO practice_questions (
+        id, subject, title, source, content_text, official_answer_text,
+        knowledge_tags_json, difficulty, created_at, content_image_url, exam_question_id, owner_user_id, has_figure
+      ) VALUES (?, ?, ?, '拍照导入', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      `practice-${questionId}`, subject, `拍照导入 · ${subject} · 第 ${questionNumber} 题`,
+      stemText, answerText, JSON.stringify(knowledgeTags), difficulty, createdAt,
+      photo.image_url, questionId, req.user.id, hasFigure
+    );
+
+    db.prepare("INSERT OR IGNORE INTO collection_questions (collection_id, exam_question_id, position) VALUES (?, ?, ?)")
+      .run(collectionId, questionId, Number(questionNumber));
+
+    db.prepare("UPDATE photo_uploads SET confirmed_question_id = ? WHERE id = ?").run(questionId, photo.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  res.json(ok({
+    exam_question_id: questionId,
+    practice_question_id: `practice-${questionId}`,
+    collection_id: collectionId
+  }));
+}));

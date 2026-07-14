@@ -283,6 +283,10 @@ ensureColumn("practice_questions", "exam_question_id", "TEXT");
 ensureColumn("practice_questions", "owner_user_id", "TEXT");
 ensureColumn("practice_questions", "has_figure", "INTEGER NOT NULL DEFAULT 0");
 // 注：question_candidates.has_figure 在 migrate-v2.js 里补（该表在那里创建）
+// 共享题库：owner 勾选共享后对全体用户可见可练；编辑/删除仍仅限 owner
+ensureColumn("exam_papers", "is_shared", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("practice_questions", "is_shared", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("question_collections", "is_shared", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("practice_attempts", "from_cache", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("practice_sessions", "grading_mode", "TEXT NOT NULL DEFAULT 'individual'");
 ensureColumn("learning_path_items", "source", "TEXT NOT NULL DEFAULT 'ai'");
@@ -779,6 +783,7 @@ export function toPracticeQuestion(row, { includeAnswer = false } = {}) {
     content_text: row.content_text,
     content_image_url: row.content_image_url || null,
     has_figure: Boolean(row.has_figure),
+    is_shared: Boolean(row.is_shared),
     exam_question_id: row.exam_question_id || null,
     knowledge_tags: parseJson(row.knowledge_tags_json, []),
     difficulty: row.difficulty,
@@ -855,6 +860,8 @@ export function toQuestionCollection(row) {
     source_paper_id: row.source_paper_id || null,
     question_count: Number(row.question_count || 0),
     is_completed: Boolean(row.is_completed),
+    is_shared: Boolean(row.is_shared),
+    is_owner: row.is_owner === undefined ? undefined : Boolean(row.is_owner),
     created_at: row.created_at
   };
 }

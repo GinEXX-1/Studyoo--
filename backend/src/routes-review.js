@@ -57,14 +57,14 @@ function findSimilarQuestion({ userId, subject, knowledgeTag, difficulty, exclud
   const row = db.prepare(`
     SELECT id FROM practice_questions
     WHERE subject = ? AND difficulty = ? AND id != ? AND knowledge_tags_json LIKE ?
-      AND (owner_user_id IS NULL OR owner_user_id = ?)
+      AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
     ORDER BY RANDOM() LIMIT 1
   `).get(subject, difficulty, excludeId, `%${knowledgeTag}%`, userId);
   if (row) return row.id;
 
   const fallback = db.prepare(`
     SELECT id FROM practice_questions
-    WHERE subject = ? AND id != ? AND (owner_user_id IS NULL OR owner_user_id = ?)
+    WHERE subject = ? AND id != ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
     ORDER BY RANDOM() LIMIT 1
   `).get(subject, excludeId, userId);
   if (fallback) return fallback.id;

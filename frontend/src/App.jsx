@@ -33,12 +33,12 @@ function AppHeader({ user }) {
     <header className="app-header">
       <button className="brand" onClick={() => navigate("/")}><span>STUDYOO</span><strong>学有</strong></button>
       <nav className="main-nav" aria-label="主导航">
-        <button className={currentPage === "" || currentPage === "home" ? "active" : ""} onClick={() => navigate("/")}>首页</button>
+        <button className={currentPage === "" || currentPage === "home" ? "active" : ""} onClick={() => navigate("/")}>工作台</button>
+        <button className={currentPage === "today" ? "active" : ""} onClick={() => navigate("/today")}>今日计划</button>
         <button className={currentPage === "library" ? "active" : ""} onClick={() => navigate("/library")}>题库</button>
-        <button className={currentPage === "today" ? "active" : ""} onClick={() => navigate("/today")}>今日</button>
         <button className={currentPage === "parser" ? "active" : ""} onClick={() => navigate("/parser")}>解析</button>
       </nav>
-      <button className="profile-chip" onClick={() => navigate("/profile")}><span>{user.nickname.slice(0, 1).toUpperCase()}</span><strong>{user.nickname}</strong></button>
+      <button className="profile-chip" onClick={() => navigate("/profile")}><span>{user.nickname.slice(0, 1).toUpperCase()}</span><strong>{user.nickname}</strong><em>个人档案</em></button>
     </header>
   );
 }
