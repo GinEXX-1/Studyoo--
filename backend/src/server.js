@@ -107,6 +107,10 @@ app.use((error, _req, res, _next) => {
   if (error instanceof AppError) {
     return fail(res, error.status, error.errorCode, error.message);
   }
+  // CORS 白名单拒绝：给出可诊断的 403，而不是误导排查的通用 500
+  if (error.message === "Not allowed by CORS") {
+    return fail(res, 403, "CORS_ORIGIN_DENIED", "该来源不在后端 CORS 白名单内，请检查 CORS_ORIGIN 配置。");
+  }
   // Express 内置错误（如 body 超限）
   if (error.type === "entity.too.large") {
     return fail(res, 413, "PAYLOAD_TOO_LARGE", "请求体过大。");
