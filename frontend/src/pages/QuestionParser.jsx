@@ -54,41 +54,28 @@ export default function QuestionParser() {
   }
 
   return (
-    <div className="page-stack">
-      <section className="page-heading"><div><p className="eyebrow">Question Parser</p><h1>题目解析</h1><p>卡住时先获得思路提示，完整解答由你主动展开。</p></div></section>
-      <section className="parser-layout">
-        <form className="tool-surface stack" onSubmit={submit}>
-          <div className="segmented parser-mode">
-            <button type="button" className={inputMode === "text" ? "active" : ""} onClick={() => setInputMode("text")}>粘贴题目</button>
-            <button type="button" className={inputMode === "image" ? "active" : ""} onClick={() => setInputMode("image")}>上传图片</button>
-          </div>
-          <label>学科<select value={subject} onChange={(event) => setSubject(event.target.value)}>{subjects.map((item) => <option key={item}>{item}</option>)}</select></label>
-          {inputMode === "text" ? (
-            <label>题目<textarea rows="10" value={contentText} onChange={(event) => setContentText(event.target.value)} placeholder="粘贴一道题目..." /></label>
-          ) : (
-            <label
-              className="image-dropzone"
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => { event.preventDefault(); chooseImage(event.dataTransfer.files?.[0]); }}
-            >
-              {imageDataUrl ? <img src={imageDataUrl} alt="待识别题目" /> : <strong>拖入题目图片</strong>}
-              <span>{imageFile ? imageFile.name : "支持 PNG、JPEG、WebP，最大 8MB"}</span>
-              <span className="file-button">选择图片<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => chooseImage(event.target.files?.[0])} /></span>
-            </label>
-          )}
-          <button className="primary" disabled={loading || (inputMode === "text" ? !contentText.trim() : !imageDataUrl)}>{loading ? inputMode === "image" ? "正在识别图片..." : "解析中..." : "获取思路"}</button>
-        </form>
-        <section className="parser-result">
-          {result ? (
-            <>
-              <p className="eyebrow">思路提示</p>
-              {inputMode === "image" && <div className="recognized-question"><strong>识别题目</strong><MathText text={result.question.content_text} /></div>}
-              {result.answer.hint_text && <div className="content-block"><MathText text={result.answer.hint_text} /></div>}
-              {result.answer.full_solution_text ? <div className="content-block solution"><MathText text={result.answer.full_solution_text} /></div> : <button className="ghost" onClick={reveal}>查看完整解答</button>}
-            </>
-          ) : <div className="review-empty"><strong>解析会出现在这里</strong><p>先自己思考，再把真正卡住的题交给 AI。</p></div>}
-        </section>
+    <div className="parser-chat-page">
+      <header className="parser-chat-heading"><span className="parser-orbit" aria-hidden="true" /><h1>把不懂的，讲到懂。</h1><p>贴一道题进来，或者直接问。</p></header>
+
+      <section className="parser-conversation" aria-live="polite">
+        {!result && !loading && <div className="parser-welcome"><span>AI 学习助手</span><strong>先说说你卡在了哪里？</strong><p>我会先给思路，再由你决定是否展开完整解答。</p></div>}
+        {(contentText || imageDataUrl) && result && <div className="parser-message parser-message-user"><strong>{subject}</strong><p>{inputMode === "image" ? "请帮我识别并分析这道题。" : contentText}</p></div>}
+        {loading && <div className="parser-typing" aria-label="AI 正在思考"><i /><i /><i /></div>}
+        {result && <div className="parser-message parser-message-ai"><span>思路提示</span>{inputMode === "image" && <div className="recognized-question"><strong>识别题目</strong><MathText text={result.question.content_text} /></div>}{result.answer.hint_text && <MathText text={result.answer.hint_text} />}{result.answer.full_solution_text ? <div className="parser-solution"><MathText text={result.answer.full_solution_text} /></div> : <button className="ghost" onClick={reveal}>查看完整解答</button>}</div>}
       </section>
+
+      {!result && <div className="parser-suggestions">
+        {["帮我解释这个数学公式", "分析这道题的关键条件", "先给我一个思路提示", "帮我检查解题步骤"].map((text) => <button key={text} onClick={() => { setInputMode("text"); setContentText(text); }}>{text}</button>)}
+      </div>}
+
+      <form className="parser-composer" onSubmit={submit}>
+        <div className="parser-composer-top">
+          <label>学科<select value={subject} onChange={(event) => setSubject(event.target.value)}>{subjects.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <div className="parser-input-tabs"><button type="button" className={inputMode === "text" ? "active" : ""} onClick={() => setInputMode("text")}>粘贴题目</button><button type="button" className={inputMode === "image" ? "active" : ""} onClick={() => setInputMode("image")}>上传图片</button></div>
+        </div>
+        {inputMode === "text" ? <textarea rows="3" aria-label="题目或问题" value={contentText} onChange={(event) => setContentText(event.target.value)} placeholder="输入你的问题，或粘贴一道题…" /> : <label className="parser-image-picker" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); chooseImage(event.dataTransfer.files?.[0]); }}>{imageDataUrl ? <img src={imageDataUrl} alt="待识别题目" /> : <strong>拖入题目图片，或点击选择</strong>}<span>{imageFile ? imageFile.name : "PNG、JPEG、WebP · 最大 8MB"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => chooseImage(event.target.files?.[0])} /></label>}
+        <div className="parser-composer-actions"><span>{inputMode === "text" ? "先思考，再提问" : "图片会在本次解析中使用"}</span><button className="primary" disabled={loading || (inputMode === "text" ? !contentText.trim() : !imageDataUrl)}>{loading ? "正在思考…" : "发送"}</button></div>
+      </form>
     </div>
   );
 }

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { apiRequest } from "../lib/api.js";
 import { toast } from "sonner";
-import MountainMark from "./MountainMark.jsx";
 
 const grades = ["高一", "高二", "高三"];
 
@@ -33,17 +32,21 @@ export default function AuthPanel({ onSignedIn }) {
   return (
     <main className="auth-shell">
       <section className="auth-brand" aria-label="Studyoo 产品理念">
-        <p className="auth-brand-label">STUDYOO · 学有</p>
-        <div className="seal">有</div>
+        <img className="auth-brand-logo" src="/brand/studyoo-black.png" alt="Studyoo" />
         <div className="auth-brand-copy">
-          <h1>真正的学习，<br />不是获得更多答案，<br />而是建立更深的理解。</h1>
-          <p>先独立作答，再让 AI 评阅、订正、复盘。每一次练习，都沉淀成属于你的能力地图。</p>
+          <h1>今天，先把<br />一件事想明白。</h1>
+          <p>每一道题，都会变成更清楚的自己。</p>
         </div>
-        <MountainMark dark />
+        <div className="auth-learning-scene" aria-label="Studyoo 学习体验预览">
+          <div className="auth-scene-card auth-scene-ai"><span>AI 学习助手</span><p>先看清条件，再一步步拆开。</p></div>
+          <div className="auth-scene-card auth-scene-course"><small>今日重点</small><strong>函数与导数</strong><span>理解进度 64%</span></div>
+          <div className="auth-scene-card auth-scene-path"><small>个性化路径</small><strong>下一站 · 导数应用</strong></div>
+        </div>
       </section>
       <section className="auth-card">
-        <p className="eyebrow">{mode === "login" ? "欢迎回来" : "创建账号"}</p>
-        <h1>让每一套题，都成为你的能力地图</h1>
+        <p className="eyebrow">{mode === "login" ? "欢迎回来" : "开始使用"}</p>
+        <h1>{mode === "login" ? "继续今天的学习。" : "建立你的学习路径。"}</h1>
+        <p className="auth-card-lede">不追求更多答案，只追求真正想明白。</p>
         <form onSubmit={submit} className="stack">
           <div className="segmented">
             <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button>
