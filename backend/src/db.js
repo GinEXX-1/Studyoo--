@@ -277,9 +277,12 @@ ensureColumn("exam_papers", "cover_image_url", "TEXT");
 ensureColumn("exam_papers", "import_kind", "TEXT NOT NULL DEFAULT 'manual'");
 ensureColumn("exam_questions", "content_image_url", "TEXT");
 ensureColumn("exam_questions", "page_number", "INTEGER");
+ensureColumn("exam_questions", "has_figure", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("practice_questions", "content_image_url", "TEXT");
 ensureColumn("practice_questions", "exam_question_id", "TEXT");
 ensureColumn("practice_questions", "owner_user_id", "TEXT");
+ensureColumn("practice_questions", "has_figure", "INTEGER NOT NULL DEFAULT 0");
+// 注：question_candidates.has_figure 在 migrate-v2.js 里补（该表在那里创建）
 ensureColumn("practice_attempts", "from_cache", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("practice_sessions", "grading_mode", "TEXT NOT NULL DEFAULT 'individual'");
 ensureColumn("learning_path_items", "source", "TEXT NOT NULL DEFAULT 'ai'");
@@ -775,6 +778,7 @@ export function toPracticeQuestion(row, { includeAnswer = false } = {}) {
     source: row.source,
     content_text: row.content_text,
     content_image_url: row.content_image_url || null,
+    has_figure: Boolean(row.has_figure),
     exam_question_id: row.exam_question_id || null,
     knowledge_tags: parseJson(row.knowledge_tags_json, []),
     difficulty: row.difficulty,

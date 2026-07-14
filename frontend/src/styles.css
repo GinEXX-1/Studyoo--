@@ -344,6 +344,8 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weig
 
 .review-form { display: grid; gap: 16px; }
 .review-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.figure-toggle { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.figure-toggle input { width: 16px; height: 16px; margin-top: 2px; flex: none; }
 .tag-editor { display: grid; gap: 10px; }
 .tag-item { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--green-soft); color: var(--green); border-radius: 4px; font-size: 12px; font-weight: 750; }
 .tag-item button { border: 0; background: transparent; color: var(--green); font-size: 16px; line-height: 1; }
@@ -383,11 +385,20 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weig
 .original-paper-mobile { margin-top: 16px; }
 .paper-image-wrapper { margin-top: 12px; }
 .paper-image-wrapper img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; }
+.question-figure { margin: 14px 0 0; }
+.question-figure img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.question-figure figcaption { margin-top: 6px; font-size: 13px; color: var(--muted); }
 
 .answer-card h2, .review-card h2 { font: 500 18px var(--serif); margin-bottom: 16px; }
 .answer-card textarea { width: 100%; min-height: 160px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; font: 15px/1.7 var(--serif); resize: vertical; }
 .answer-card textarea:focus { border-color: var(--green); outline: none; box-shadow: 0 0 0 3px rgba(31,111,92,.13); }
 .answer-card button { width: 100%; padding: 14px; margin-top: 12px; }
+.math-keyboard { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.math-keyboard button { width: auto; min-width: 40px; margin-top: 0; padding: 8px 10px; font: 15px/1 var(--serif); color: var(--ink); background: var(--wash, #f2f1ec); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.math-keyboard button:active { background: var(--green); color: #fff; }
+.math-keyboard button:last-child { font-size: 13px; padding-inline: 12px; }
+.answer-preview { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 6px; background: var(--wash, #faf9f5); overflow-x: auto; }
+.answer-preview-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 
 .score-section { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
 .score-value { font: 500 56px var(--serif); color: var(--clay); }

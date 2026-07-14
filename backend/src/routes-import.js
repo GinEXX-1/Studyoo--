@@ -98,6 +98,7 @@ function toQuestionCandidate(row) {
     difficulty: row.difficulty,
     question_type: row.question_type,
     recognition_confidence: row.recognition_confidence,
+    has_figure: Boolean(row.has_figure),
     requires_manual_review: Boolean(row.requires_manual_review),
     review_status: row.review_status,
     reviewed_by: row.reviewed_by,
@@ -248,14 +249,16 @@ function insertManualCandidate({ task, page, input = {}, fallback = {}, createdA
     throw new AppError(400, "VALIDATION_ERROR", "题号必须是正整数。");
   }
 
+  const hasFigure = typeof input.has_figure === "boolean" ? input.has_figure : Boolean(fallback.has_figure);
+
   db.prepare(`
     INSERT INTO question_candidates (
       id, task_id, page_id, page_number, question_number, subject,
       stem_text, options_json, reference_answer_text, knowledge_tags_json,
       difficulty, question_type, recognition_confidence, requires_manual_review,
       review_status, reviewed_by, reviewed_at, review_notes, created_at, updated_at,
-      crop_bbox_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'reviewing', ?, ?, ?, ?, ?, ?)
+      crop_bbox_json, has_figure
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'reviewing', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     candidateId, task.id, page.id, page.page_number, questionNumber, task.subject,
     stemText,
@@ -266,7 +269,8 @@ function insertManualCandidate({ task, page, input = {}, fallback = {}, createdA
     task.user_id, createdAt,
     typeof input.review_notes === "string" ? input.review_notes.trim() : "人工校对创建",
     createdAt, createdAt,
-    manualBBox ? JSON.stringify(manualBBox) : (fallback.crop_bbox_json || null)
+    manualBBox ? JSON.stringify(manualBBox) : (fallback.crop_bbox_json || null),
+    hasFigure ? 1 : 0
   );
   return db.prepare("SELECT * FROM question_candidates WHERE id = ?").get(candidateId);
 }
@@ -483,8 +487,8 @@ importRouter.post("/import/pipeline/pages/:pageId/process", requireAuth, asyncRo
           id, task_id, page_id, page_number, question_number, subject,
           stem_text, options_json, reference_answer_text, knowledge_tags_json,
           difficulty, question_type, recognition_confidence, requires_manual_review,
-          review_status, created_at, updated_at, crop_bbox_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+          review_status, created_at, updated_at, crop_bbox_json, has_figure
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
       `).run(
         candidateId, task.id, page.id, page.page_number,
         Number(q.question_number) || candidates.length + 1,
@@ -498,7 +502,8 @@ importRouter.post("/import/pipeline/pages/:pageId/process", requireAuth, asyncRo
         confidence,
         requiresManual ? 1 : 0,
         createdAt, createdAt,
-        q.bbox_rel ? JSON.stringify(q.bbox_rel) : null
+        q.bbox_rel ? JSON.stringify(q.bbox_rel) : null,
+        q.has_figure ? 1 : 0
       );
 
       candidates.push(toQuestionCandidate(db.prepare("SELECT * FROM question_candidates WHERE id = ?").get(candidateId)));
@@ -658,8 +663,8 @@ importRouter.post("/import/pipeline/tasks/:taskId/process-all", requireAuth, asy
             id, task_id, page_id, page_number, question_number, subject,
             stem_text, options_json, reference_answer_text, knowledge_tags_json,
             difficulty, question_type, recognition_confidence, requires_manual_review,
-            review_status, created_at, updated_at, crop_bbox_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+            review_status, created_at, updated_at, crop_bbox_json, has_figure
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
         `).run(
           candidateId, task.id, page.id, page.page_number,
           Number(q.question_number) || 0,
@@ -673,7 +678,8 @@ importRouter.post("/import/pipeline/tasks/:taskId/process-all", requireAuth, asy
           typeof q.confidence === "number" ? q.confidence : 0.7,
           (typeof q.confidence === "number" ? q.confidence : 0.7) < 0.85 ? 1 : 0,
           createdAt, createdAt,
-          q.bbox_rel ? JSON.stringify(q.bbox_rel) : null
+          q.bbox_rel ? JSON.stringify(q.bbox_rel) : null,
+          q.has_figure ? 1 : 0
         );
       }
       db.exec("COMMIT");
@@ -736,6 +742,7 @@ importRouter.patch("/import/pipeline/candidates/:candidateId", requireAuth, asyn
   if (typeof req.body.difficulty === "string" && ["easy", "medium", "hard"].includes(req.body.difficulty)) updates.difficulty = req.body.difficulty;
   if (typeof req.body.question_type === "string" && ["choice", "fill-in-blank", "short-answer"].includes(req.body.question_type)) updates.question_type = req.body.question_type;
   if (typeof req.body.question_number === "number") updates.question_number = req.body.question_number;
+  if (typeof req.body.has_figure === "boolean") updates.has_figure = req.body.has_figure ? 1 : 0;
   if (Array.isArray(req.body.options)) updates.options_json = JSON.stringify(req.body.options.filter((o) => o && typeof o.label === "string"));
   if (Array.isArray(req.body.knowledge_tags)) {
     updates.knowledge_tags_json = JSON.stringify(normalizeKnowledgeTags(subject, req.body.knowledge_tags));
@@ -1046,23 +1053,25 @@ importRouter.post("/import/pipeline/candidates/:candidateId/confirm", requireAut
       INSERT INTO exam_questions (
         id, paper_id, question_number, subject, question_type, content_text,
         official_answer_text, source, knowledge_tags_json, difficulty, status,
-        created_at, content_image_url, page_number, source_task_id, confidence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_profile', ?, ?, ?, ?, ?)
+        created_at, content_image_url, page_number, source_task_id, confidence, has_figure
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_profile', ?, ?, ?, ?, ?, ?)
     `).run(
       questionId, paperId, questionNumber, task.subject, questionType, stemText,
       answerText, task.source_name, JSON.stringify(knowledgeTags), difficulty,
-      createdAt, sourceImageUrl, candidate.page_number, task.id, confidence
+      createdAt, sourceImageUrl, candidate.page_number, task.id, confidence,
+      candidate.has_figure ? 1 : 0
     );
 
     db.prepare(`
       INSERT INTO practice_questions (
         id, subject, title, source, content_text, official_answer_text,
-        knowledge_tags_json, difficulty, created_at, content_image_url, exam_question_id, source_task_id, owner_user_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        knowledge_tags_json, difficulty, created_at, content_image_url, exam_question_id, source_task_id, owner_user_id, has_figure
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       `practice-${questionId}`, task.subject, title, task.source_name, stemText,
       answerText, JSON.stringify(knowledgeTags), difficulty, createdAt,
-      sourceImageUrl, questionId, task.id, req.user.id
+      sourceImageUrl, questionId, task.id, req.user.id,
+      candidate.has_figure ? 1 : 0
     );
 
     db.prepare(`
@@ -1139,25 +1148,27 @@ importRouter.post("/import/pipeline/candidates/batch-confirm", requireAuth, asyn
         INSERT INTO exam_questions (
           id, paper_id, question_number, subject, question_type, content_text,
           official_answer_text, source, knowledge_tags_json, difficulty, status,
-          created_at, content_image_url, page_number, source_task_id, confidence
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_profile', ?, ?, ?, ?, ?)
+          created_at, content_image_url, page_number, source_task_id, confidence, has_figure
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_profile', ?, ?, ?, ?, ?, ?)
       `).run(
         questionId, paperId, questionNumber, task.subject, candidate.question_type || "choice",
         stemText, answerText, task.source_name, JSON.stringify(knowledgeTags),
         candidate.difficulty || "medium", createdAt,
-        sourceImageUrl, candidate.page_number, task.id, candidate.recognition_confidence
+        sourceImageUrl, candidate.page_number, task.id, candidate.recognition_confidence,
+        candidate.has_figure ? 1 : 0
       );
 
       const title = `${task.source_name.replace(/\.pdf$/i, "")} · 第 ${candidate.page_number} 页第 ${questionNumber} 题`;
       db.prepare(`
         INSERT INTO practice_questions (
           id, subject, title, source, content_text, official_answer_text,
-          knowledge_tags_json, difficulty, created_at, content_image_url, exam_question_id, source_task_id, owner_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          knowledge_tags_json, difficulty, created_at, content_image_url, exam_question_id, source_task_id, owner_user_id, has_figure
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         `practice-${questionId}`, task.subject, title, task.source_name, stemText,
         answerText, JSON.stringify(knowledgeTags), candidate.difficulty || "medium", createdAt,
-        sourceImageUrl, questionId, task.id, req.user.id
+        sourceImageUrl, questionId, task.id, req.user.id,
+        candidate.has_figure ? 1 : 0
       );
 
       db.prepare(`

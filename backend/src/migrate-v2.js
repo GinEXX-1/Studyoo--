@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS question_candidates (
   confirmed_question_type TEXT,
   recognition_attempts INTEGER NOT NULL DEFAULT 0,
   last_recognition_error TEXT,
+  has_figure INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (task_id) REFERENCES import_tasks(id),
@@ -127,6 +128,8 @@ CREATE INDEX IF NOT EXISTS idx_question_candidates_task ON question_candidates(t
 
 ensureColumn("import_tasks", "title", "TEXT");
 ensureColumn("import_tasks", "year", "INTEGER");
+// 老库补列：含图标记（几何图/函数图像/图表等，无法用文字完整转写）
+ensureColumn("question_candidates", "has_figure", "INTEGER NOT NULL DEFAULT 0");
 
 // v2.1：PDF 原文不再存数据库（uploads 目录已有原始文件），清空历史遗留的 base64 副本。
 db.exec("UPDATE import_tasks SET pdf_data_base64 = NULL WHERE pdf_data_base64 IS NOT NULL");

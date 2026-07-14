@@ -326,6 +326,7 @@ export async function recognizePageQuestions({ subject, imageDataUrl, canonicalT
         "knowledge_tags": ["知识点"],
         "difficulty": "easy|medium|hard",
         "question_type": "choice|fill-in-blank|short-answer",
+        "has_figure": false,
         "bbox_rel": {"x": 0, "y": 0, "width": 100, "height": 30},
         "confidence": 0.9
       }
@@ -356,10 +357,11 @@ ${canonicalTagHint(canonicalTags)}
 1. 忠实转写每道题的题干、选项和答案，公式使用 LaTeX（行内 $...$）。不要凭空补全看不清的内容。
 2. 为每道题标注题型（choice/fill-in-blank/short-answer）、难度（easy/medium/hard）和知识标签。
 3. question_number 必须使用页面上印刷的阿拉伯数字题号，不要自己重新编号。
-4. bbox_rel 用 0-100 的相对坐标标记该题在本页的位置（x=水平起点%, y=垂直起点%, width=宽度%, height=高度%），尽量紧贴该题的实际范围，这个框会被用来裁剪单题图片。
+4. bbox_rel 用 0-100 的相对坐标标记该题在本页的位置（x=水平起点%, y=垂直起点%, width=宽度%, height=高度%），尽量紧贴该题的实际范围，这个框会被用来裁剪单题图片。含图题目务必让框完整包住图形。
 5. confidence 表示你对这道题识别完整度的信心（0-1）。
 6. 如果某题有明显参考答案标注，填入 reference_answer_text，否则用 null。
 7. page_text 写本页全部文字的 OCR 转录。
+8. has_figure：如果该题包含无法用文字完整表达的图形（几何图、函数图像、统计图表、物理装置图、地理示意图、坐标系作图等），设为 true；纯文字/纯公式题设为 false。has_figure 为 true 时，stem_text 里用一句 [图] 简述图形内容，学生将直接看该题的裁切原图作答。
 
 只返回 JSON，形状必须是：${schema}`
         }
@@ -382,6 +384,7 @@ export async function recognizeSingleQuestion({ subject, imageDataUrl, questionN
     "knowledge_tags": ["知识点"],
     "difficulty": "easy|medium|hard",
     "question_type": "choice|fill-in-blank|short-answer",
+    "has_figure": false,
     "confidence": 0.9
   }`;
 
@@ -400,6 +403,7 @@ ${canonicalTagHint(canonicalTags)}
 1. 忠实转写题干和选项，公式用 LaTeX；裁切边缘不完整的内容不要凭空补全。
 2. 如果图中混入了相邻题目的内容，忽略它们，只输出第 ${questionNumber} 题。
 3. confidence 表示识别完整度（0-1）。
+4. has_figure：题目含无法用文字完整表达的图形（几何图/函数图像/图表/装置图等）设为 true，否则 false。
 
 只返回 JSON，形状必须是：${schema}`
         }

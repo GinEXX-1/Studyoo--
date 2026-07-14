@@ -130,7 +130,8 @@ export default function ImportPage() {
       question_type: candidate.question_type || "choice",
       difficulty: candidate.difficulty || "medium",
       knowledge_tags: candidate.knowledge_tags || [],
-      options: candidate.options || []
+      options: candidate.options || [],
+      has_figure: Boolean(candidate.has_figure)
     });
   }
 
@@ -168,7 +169,7 @@ export default function ImportPage() {
     setCreating(true);
     setSplitParts(null);
     setSelection(null);
-    setEditing({ question_number: suggestedNumber, stem_text: "", reference_answer_text: "", question_type: "choice", difficulty: "medium", knowledge_tags: [], options: [] });
+    setEditing({ question_number: suggestedNumber, stem_text: "", reference_answer_text: "", question_type: "choice", difficulty: "medium", knowledge_tags: [], options: [], has_figure: false });
   }
 
   async function saveNewCandidate() {
@@ -492,6 +493,7 @@ export default function ImportPage() {
               {splitParts ? <div className="split-editor"><p>分别整理拆分后的题号和题干</p>{splitParts.map((part, index) => <div className="split-part" key={index}><label>题号<input type="number" value={part.question_number} onChange={(event) => setSplitParts((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, question_number: Number(event.target.value) } : item))} /></label><label>第 {index + 1} 道题<textarea rows="6" value={part.stem_text} onChange={(event) => setSplitParts((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, stem_text: event.target.value } : item))} /></label></div>)}<div className="review-actions"><button className="ghost" onClick={() => setSplitParts(null)}>取消</button><button className="primary" disabled={saving} onClick={saveSplit}>确认拆分</button></div></div> : <><div className="review-form">
                 <label>题目内容<textarea rows="8" value={editing?.stem_text || ""} onChange={(event) => updateField("stem_text", event.target.value)} /></label>
                 <div className="review-form-row"><label>题号<input type="number" value={editing?.question_number || ""} onChange={(event) => updateField("question_number", Number(event.target.value))} /></label><label>题型<select value={editing?.question_type || "choice"} onChange={(event) => updateField("question_type", event.target.value)}>{questionTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label></div>
+                <label className="figure-toggle"><input type="checkbox" checked={Boolean(editing?.has_figure)} onChange={(event) => updateField("has_figure", event.target.checked)} /><span>本题含图形（几何图/函数图像/图表等）——做题时直接展示裁切原图</span></label>
                 <label>参考答案<textarea rows="4" value={editing?.reference_answer_text || ""} onChange={(event) => updateField("reference_answer_text", event.target.value)} /></label>
                 <label>知识点标签<div className="tag-editor"><div>{editing?.knowledge_tags.map((tag) => <span key={tag} className="tag-item">{tag}<button type="button" onClick={() => updateField("knowledge_tags", editing.knowledge_tags.filter((item) => item !== tag))}>×</button></span>)}</div><div className="tag-suggestions">{subjectTags[subject].filter((tag) => !editing?.knowledge_tags.includes(tag)).slice(0, 8).map((tag) => <button type="button" key={tag} onClick={() => updateField("knowledge_tags", [...editing.knowledge_tags, tag])}>{tag}</button>)}</div></div></label>
               </div>

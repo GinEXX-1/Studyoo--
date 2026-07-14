@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { MathText } from "../components/MathText.jsx";
+import MathKeyboard from "../components/MathKeyboard.jsx";
 import { apiRequest } from "../lib/api.js";
 
 export default function PracticePage() {
@@ -26,6 +27,7 @@ export default function PracticePage() {
   const [followMessages, setFollowMessages] = useState([]);
   const reviewRef = useRef(null);
   const questionContentRef = useRef(null);
+  const answerRef = useRef(null);
 
   useEffect(() => {
     apiRequest(`/collections/${id}`).then(setDetail).catch((error) => toast.error(error.message));
@@ -219,10 +221,11 @@ export default function PracticePage() {
             <h1 className="question-title">{question.title}</h1>
             <div ref={questionContentRef} className="question-content selectable-question" onMouseUp={captureQuestionSelection}><MathText text={question.content_text} /></div>
             {followContext?.type === "question" && <button className="context-follow-button" onClick={() => openFollowUp("question", followContext.text)}>追问选中内容</button>}
-            {question.content_image_url && <div className="original-paper-mobile"><button className="ghost" onClick={() => setShowOriginal((value) => !value)}>{showOriginal ? "收起原卷" : "查看原卷"}</button>{showOriginal && <div className="paper-image-wrapper"><img src={question.content_image_url} alt={`原卷第 ${current.page_number || ""} 页`} /></div>}</div>}
+            {question.has_figure && question.content_image_url && <figure className="question-figure"><img src={question.content_image_url} alt={`第 ${current.question_number} 题原图`} /><figcaption>本题含图形，请对照上图作答</figcaption></figure>}
+            {question.content_image_url && !question.has_figure && <div className="original-paper-mobile"><button className="ghost" onClick={() => setShowOriginal((value) => !value)}>{showOriginal ? "收起原卷" : "查看原卷"}</button>{showOriginal && <div className="paper-image-wrapper"><img src={question.content_image_url} alt={`原卷第 ${current.page_number || ""} 页`} /></div>}</div>}
           </div>
 
-          {!showReview ? <div className="answer-card"><h2>我的作答</h2><form onSubmit={submit}><textarea rows="8" value={answerText} onChange={(event) => setAnswerText(event.target.value)} placeholder="写下思路、步骤和答案。选择题也请说明判断依据。" /><button className="primary" disabled={!answerText.trim() || loading === "attempt"}>{loading === "attempt" ? "AI 评阅中..." : gradingMode === "unified" && index + 1 < detail.questions.length ? "保存并继续" : gradingMode === "unified" ? "提交整套题" : "提交作答"}</button></form></div> :
+          {!showReview ? <div className="answer-card"><h2>我的作答</h2><form onSubmit={submit}><MathKeyboard targetRef={answerRef} value={answerText} onChange={setAnswerText} /><textarea ref={answerRef} rows="8" value={answerText} onChange={(event) => setAnswerText(event.target.value)} placeholder="写下思路、步骤和答案。数学符号点上方按钮插入，公式写在 $…$ 之间。" />{answerText.includes("$") && <div className="answer-preview"><span className="answer-preview-label">公式预览</span><MathText text={answerText} /></div>}<button className="primary" disabled={!answerText.trim() || loading === "attempt"}>{loading === "attempt" ? "AI 评阅中..." : gradingMode === "unified" && index + 1 < detail.questions.length ? "保存并继续" : gradingMode === "unified" ? "提交整套题" : "提交作答"}</button></form></div> :
             <div ref={reviewRef} className="review-card"><div className="review-title-row"><h2>评阅结果</h2>{attempt?.from_cache && <span className="memory-badge">AI 记忆</span>}</div>{attempt && <><div className="score-section"><strong className="score-value">{attempt.score}</strong><span className={`score-status ${attempt.is_correct ? "correct" : "wrong"}`}>{attempt.is_correct ? "基本掌握" : "需要订正"}</span></div><div className="feedback-section"><MathText text={attempt.feedback_text} /><button className="text-button" onClick={() => openFollowUp("feedback", attempt.feedback_text)}>追问</button></div>{attempt.step_breakdown?.map((step) => <div key={step.step_number} className="step-card"><span className="step-number">{step.step_number}</span><div><MathText text={step.explanation} /><button className="text-button" onClick={() => openFollowUp("step", step.explanation)}>追问这一步</button></div></div>)}<div className="next-action-card">{attempt.next_action}</div>{question.official_answer_text && !question.official_answer_text.startsWith("原 PDF 未附") && <div className="reference-answer-mobile"><strong>参考答案</strong><MathText text={question.official_answer_text} /><button className="text-button" onClick={() => openFollowUp("answer", question.official_answer_text)}>追问答案</button></div>}<div className="review-actions"><button className="ghost" onClick={() => openFollowUp("analysis", attempt.feedback_text)}>继续追问</button><button className="primary" onClick={next}>{index + 1 >= detail.questions.length ? "完成这套题" : "下一题"}</button></div></>}</div>}
 
           {followContext && <section className="follow-up-panel"><div className="follow-up-heading"><strong>追问</strong><button className="text-button" onClick={() => setFollowContext(null)}>关闭</button></div>{followContext.text && <blockquote><MathText text={followContext.text} /></blockquote>}{followMessages.map((message, messageIndex) => <div className="follow-up-message" key={messageIndex}><p>{message.question}</p><MathText text={message.answer} /></div>)}<form onSubmit={askFollowUp}><textarea rows="3" value={followQuestion} onChange={(event) => setFollowQuestion(event.target.value)} placeholder="具体说说哪里没有理解" /><button className="primary" disabled={!followQuestion.trim() || loading === "follow-up"}>{loading === "follow-up" ? "思考中..." : "发送追问"}</button></form></section>}
