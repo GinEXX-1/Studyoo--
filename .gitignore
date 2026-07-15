@@ -8,4 +8,7 @@ dist
 .obsidian
 backend/uploads/
 /uploads/
-tmp/pdfs/
+tmp/
+backups/
+未命名.canvas
+.claude/

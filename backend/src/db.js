@@ -257,6 +257,39 @@ CREATE TABLE IF NOT EXISTS ai_usage_global (
 );
 `);
 
+// 最小事件埋点：只为回答"用户在哪一步流失"，不做通用分析平台
+db.exec(`
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  event_name TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_name_time ON events(event_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, created_at);
+`);
+
+// 重做机制：一道做错的练习题从"错"到"会"的订正状态机
+// wrong → corrected → redo_pending → redo_passed / redo_failed(回 corrected)
+// 注：《重做机制开发计划》原案复用 mistake_records，但该表外键绑定解析题（questions），
+// 练习题（practice_questions）不共享 ID 空间，故单独建表。
+db.exec(`
+CREATE TABLE IF NOT EXISTS practice_corrections (
+  user_id TEXT NOT NULL,
+  practice_question_id TEXT NOT NULL,
+  correction_status TEXT NOT NULL DEFAULT 'wrong',
+  note TEXT,
+  redo_count INTEGER NOT NULL DEFAULT 0,
+  redo_available_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, practice_question_id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (practice_question_id) REFERENCES practice_questions(id)
+);
+`);
+
 /**
  * 添加数据库列（仅接受硬编码字面量，禁止传入用户输入）。
  * 所有调用均使用编译时常量，不存在 SQL 注入风险。
@@ -291,6 +324,26 @@ ensureColumn("practice_attempts", "from_cache", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("practice_sessions", "grading_mode", "TEXT NOT NULL DEFAULT 'individual'");
 ensureColumn("learning_path_items", "source", "TEXT NOT NULL DEFAULT 'ai'");
 ensureColumn("learning_path_items", "generated_at", "TEXT");
+// 密码找回兜底：注册时可选留联系方式（QQ/微信/手机任一），忘记密码时管理员据此人工核验
+ensureColumn("users", "contact", "TEXT");
+// 重做机制：作答轮次链（第几次作答、指向被重做的那次、AI 对比反馈）
+ensureColumn("practice_attempts", "attempt_round", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("practice_attempts", "parent_attempt_id", "TEXT");
+ensureColumn("practice_attempts", "is_redo", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("practice_attempts", "progress_note", "TEXT");
+// 配额从"按次"升级为"按 token 成本"计量（次数护栏保留）
+ensureColumn("ai_usage", "tokens", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("ai_usage_global", "tokens", "INTEGER NOT NULL DEFAULT 0");
+
+// 复合索引（v2.1 审计 P1 项）：高频查询路径
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_practice_attempts_user_question ON practice_attempts(user_id, practice_question_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_practice_attempts_user_time ON practice_attempts(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mistake_records_user_status ON mistake_records(user_id, mastery_status);
+CREATE INDEX IF NOT EXISTS idx_questions_user_status ON questions(user_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_learning_path_user_status ON learning_path_items(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_practice_questions_subject_owner ON practice_questions(subject, owner_user_id);
+`);
 
 const canonicalTagCatalog = {
   "数学": {
@@ -741,8 +794,21 @@ export function toUser(row) {
     nickname: row.nickname,
     grade: row.grade,
     subjects: parseJson(row.subjects_json, []),
+    contact: row.contact || null,
     created_at: row.created_at
   };
+}
+
+// 埋点写入。失败绝不影响主流程——埋点是观测手段，不是业务。
+export function recordEvent(userId, eventName, payload = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO events (id, user_id, event_name, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(crypto.randomUUID(), userId || null, eventName, JSON.stringify(payload), nowIso());
+  } catch (error) {
+    console.error("[events] 埋点写入失败：", error.message);
+  }
 }
 
 export function toQuestion(row) {
@@ -805,7 +871,23 @@ export function toPracticeAttempt(row) {
     step_breakdown: parseJson(row.step_breakdown_json, []),
     next_action: row.next_action,
     from_cache: Boolean(row.from_cache),
+    attempt_round: Number(row.attempt_round || 1),
+    is_redo: Boolean(row.is_redo),
+    parent_attempt_id: row.parent_attempt_id || null,
+    progress_note: row.progress_note || null,
     created_at: row.created_at
+  };
+}
+
+export function toPracticeCorrection(row) {
+  if (!row) return null;
+  return {
+    practice_question_id: row.practice_question_id,
+    correction_status: row.correction_status,
+    note: row.note || null,
+    redo_count: Number(row.redo_count || 0),
+    redo_available_at: row.redo_available_at || null,
+    updated_at: row.updated_at
   };
 }
 

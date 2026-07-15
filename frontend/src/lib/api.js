@@ -28,3 +28,11 @@ export async function apiRequest(path, options = {}) {
 
   return payload.data;
 }
+
+// 埋点上报：fire-and-forget，失败静默——观测手段绝不打扰学习主流程
+export function trackEvent(eventName, payload = {}) {
+  apiRequest("/events", {
+    method: "POST",
+    body: JSON.stringify({ event_name: eventName, payload })
+  }).catch(() => {});
+}

@@ -12,7 +12,9 @@
     "test:practice-workflow": "rm -f /tmp/studyoo-practice-workflow-test.db && node --no-warnings scripts/test-practice-workflow.mjs",
     "quality:import": "node --no-warnings scripts/import-quality-report.mjs",
     "test:guardrails": "rm -f /tmp/studyoo-guardrails-test.db && node --no-warnings scripts/test-guardrails.mjs",
+    "test:redo": "rm -f /tmp/studyoo-redo-test.db && node --no-warnings scripts/test-redo.mjs",
     "backup:db": "node --no-warnings scripts/backup-db.mjs",
+    "report:funnel": "node --no-warnings scripts/funnel-report.mjs",
     "admin:reset-password": "node --no-warnings scripts/reset-password.mjs"
   },
   "dependencies": {
