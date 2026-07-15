@@ -7,9 +7,9 @@
 }
 
 :root {
-  --serif: "Times New Roman", Times, "Songti SC", "SimSun", "STSong", "Noto Serif SC", serif;
-  --serif-heavy: "Songti SC", "SimSun", "STSong", "Noto Serif SC", serif;
-  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --serif: "PingFang SC", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --serif-heavy: "PingFang SC", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --mono: "PingFang SC", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   --text-display-xl: clamp(44px, 6vw, 76px);
   --text-display-lg: clamp(40px, 5vw, 64px);
   --text-h2: 30px;

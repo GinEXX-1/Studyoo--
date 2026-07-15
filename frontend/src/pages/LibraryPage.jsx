@@ -17,6 +17,7 @@ export default function LibraryPage() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ title: "", description: "", cover_style: "mint" });
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   async function loadCollections(preferredId = null) {
     try {
@@ -29,7 +30,7 @@ export default function LibraryPage() {
     }
   }
 
-  async function selectCollection(id) {
+  async function selectCollection(id, openOnMobile = false) {
     try {
       setSelectedId(id);
       const data = await apiRequest(`/collections/${id}`);
@@ -37,6 +38,10 @@ export default function LibraryPage() {
       setDraft({ title: data.collection.title, description: data.collection.description, cover_style: data.collection.cover_style });
       setEditing(false);
       setDeleteArmed(false);
+      if (openOnMobile) {
+        setMobileDetailOpen(true);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     } catch (err) {
       toast.error(err.message);
     }
@@ -107,7 +112,7 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="page-stack">
+    <div className={`page-stack library-page${mobileDetailOpen ? " mobile-detail-active" : ""}`}>
       <section className="page-heading">
         <div><p className="eyebrow">Question Bank</p><h1>题库</h1><p>像整理播放列表一样，建立真正想做完的试卷。</p></div>
         <div className="library-mode-tabs">
@@ -123,11 +128,11 @@ export default function LibraryPage() {
       {mode === "manual" && <ManualBuilder onCreated={handleCreated} />}
       {mode === "photo" && <PhotoImport onDone={(collectionId) => { setMode("library"); loadCollections(collectionId); }} />}
       {mode === "library" && (
-        <section className="library-layout">
+        <section className={`library-layout${mobileDetailOpen ? " mobile-detail-open" : ""}`}>
           <div className="collection-grid">
-            {collections.map((collection) => (
-              <button key={collection.id} className={selectedId === collection.id ? "collection-tile active" : "collection-tile"} onClick={() => selectCollection(collection.id)}>
-                <CollectionCover collection={collection} />
+            {collections.map((collection, index) => (
+              <button key={collection.id} className={selectedId === collection.id ? "collection-tile active" : "collection-tile"} onClick={() => selectCollection(collection.id, true)}>
+                <CollectionCover collection={collection} variant={index} />
                 <strong>{collection.title}</strong>
                 <span>{collection.question_count} 题 · {collection.creation_mode.startsWith("ai") ? "AI 组卷" : collection.creation_mode === "pdf" ? "PDF" : collection.creation_mode === "photo" ? "拍照" : "手动"}{collection.is_shared ? (collection.is_owner ? " · 已共享" : " · 来自共享") : ""}</span>
               </button>
@@ -135,7 +140,8 @@ export default function LibraryPage() {
           </div>
           {detail && (
             <aside className="collection-detail">
-              <CollectionCover collection={detail.collection} size="large" />
+              <button className="mobile-detail-back" onClick={() => setMobileDetailOpen(false)}>返回题库</button>
+              <CollectionCover collection={detail.collection} size="large" variant={Math.max(0, collections.findIndex((collection) => collection.id === detail.collection.id))} />
               <p className="eyebrow">{detail.collection.subject} · {detail.collection.question_count} 题</p>
               {editing ? <div className="collection-edit-form"><label>名称<input value={draft.title} onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} /></label><label>说明<textarea rows="3" value={draft.description} onChange={(event) => setDraft((value) => ({ ...value, description: event.target.value }))} /></label><label>封面<select value={draft.cover_style} onChange={(event) => setDraft((value) => ({ ...value, cover_style: event.target.value }))}><option value="mint">绿色</option><option value="blue">蓝色</option><option value="clay">红色</option><option value="ink">黑色</option></select></label><div className="collection-edit-actions"><button className="ghost" onClick={() => setEditing(false)}>取消</button><button className="primary" onClick={saveCollection}>保存</button></div></div> : <><h2>{detail.collection.title}</h2><p>{detail.collection.description}</p></>}
               {!editing && <div className="collection-commands"><button className="primary start-button" onClick={() => startCollection(detail.collection.id)}>开始</button>{detail.collection.is_owner && <><button className="ghost" onClick={() => setEditing(true)}>编辑</button><button className="ghost" onClick={toggleShare}>{detail.collection.is_shared ? "取消共享" : "共享"}</button>{!detail.collection.is_completed && <button className={deleteArmed ? "danger" : "ghost"} onClick={deleteCollection}>{deleteArmed ? "确认删除" : "删除"}</button>}</>}{!detail.collection.is_owner && detail.collection.is_shared && <span className="shared-note">来自其他同学的共享题库</span>}</div>}
