@@ -270,6 +270,38 @@ CREATE INDEX IF NOT EXISTS idx_events_name_time ON events(event_name, created_at
 CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, created_at);
 `);
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS user_feedback (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  category TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  admin_note TEXT,
+  app_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_status_time ON user_feedback(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_user_time ON user_feedback(user_id, created_at);
+`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS discovery_ratings (
+  user_id TEXT NOT NULL,
+  exam_question_id TEXT NOT NULL,
+  rating INTEGER NOT NULL,
+  comment TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, exam_question_id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (exam_question_id) REFERENCES exam_questions(id)
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_ratings_question ON discovery_ratings(exam_question_id, rating);
+`);
+
 // 重做机制：一道做错的练习题从"错"到"会"的订正状态机
 // wrong → corrected → redo_pending → redo_passed / redo_failed(回 corrected)
 // 注：《重做机制开发计划》原案复用 mistake_records，但该表外键绑定解析题（questions），
@@ -326,6 +358,14 @@ ensureColumn("learning_path_items", "source", "TEXT NOT NULL DEFAULT 'ai'");
 ensureColumn("learning_path_items", "generated_at", "TEXT");
 // 密码找回兜底：注册时可选留联系方式（QQ/微信/手机任一），忘记密码时管理员据此人工核验
 ensureColumn("users", "contact", "TEXT");
+// 新用户画像：3+1+2 选科、目标与当前学情，作为学习路径的初始先验。
+ensureColumn("users", "exam_track", "TEXT");
+ensureColumn("users", "electives_json", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("users", "target_score", "INTEGER");
+ensureColumn("users", "current_score_band", "TEXT");
+ensureColumn("users", "learning_context", "TEXT");
+ensureColumn("users", "onboarding_completed", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("users", "is_admin", "INTEGER NOT NULL DEFAULT 0");
 // 重做机制：作答轮次链（第几次作答、指向被重做的那次、AI 对比反馈）
 ensureColumn("practice_attempts", "attempt_round", "INTEGER NOT NULL DEFAULT 1");
 ensureColumn("practice_attempts", "parent_attempt_id", "TEXT");
@@ -344,6 +384,10 @@ CREATE INDEX IF NOT EXISTS idx_questions_user_status ON questions(user_id, statu
 CREATE INDEX IF NOT EXISTS idx_learning_path_user_status ON learning_path_items(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_practice_questions_subject_owner ON practice_questions(subject, owner_user_id);
 `);
+
+for (const nickname of config.adminNicknames) {
+  db.prepare("UPDATE users SET is_admin = 1 WHERE nickname = ?").run(nickname);
+}
 
 const canonicalTagCatalog = {
   "数学": {
@@ -795,6 +839,13 @@ export function toUser(row) {
     grade: row.grade,
     subjects: parseJson(row.subjects_json, []),
     contact: row.contact || null,
+    exam_track: row.exam_track || null,
+    electives: parseJson(row.electives_json, []),
+    target_score: row.target_score === null || row.target_score === undefined ? null : Number(row.target_score),
+    current_score_band: row.current_score_band || null,
+    learning_context: row.learning_context || null,
+    onboarding_completed: Boolean(row.onboarding_completed),
+    is_admin: Boolean(row.is_admin),
     created_at: row.created_at
   };
 }

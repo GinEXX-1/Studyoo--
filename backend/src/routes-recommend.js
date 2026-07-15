@@ -18,6 +18,65 @@ import { AppError, asyncRoute, ok } from "./http.js";
 
 export const recommendRouter = express.Router();
 
+const knowledgeDependencies = {
+  "数学": [["基础运算", "函数"], ["函数", "二次函数"], ["函数", "三角函数"], ["函数", "数列"], ["二次函数", "导数"], ["导数", "综合应用"], ["概率统计", "综合应用"]],
+  "物理": [["运动学", "牛顿运动定律"], ["牛顿运动定律", "机械能"], ["电路", "电磁学"], ["机械能", "综合应用"], ["电磁学", "综合应用"]],
+  "化学": [["物质的量", "离子反应"], ["离子反应", "氧化还原反应"], ["氧化还原反应", "化学平衡"], ["化学平衡", "综合应用"]],
+  "生物": [["细胞结构", "遗传规律"], ["细胞结构", "稳态与调节"], ["稳态与调节", "生态系统"], ["遗传规律", "生物技术"]],
+  "历史": [["史料实证", "中国近代史"], ["中国近代史", "中国现代史"], ["世界近代史", "工业革命"], ["工业革命", "综合论证"]],
+  "地理": [["地球运动", "大气运动"], ["大气运动", "农业区位"], ["农业区位", "城市化"], ["城市化", "区域可持续发展"]],
+  "政治": [["市场经济", "民主政治"], ["民主政治", "依法治国"], ["哲学原理", "文化传承"], ["依法治国", "综合论述"]],
+  "语文": [["语言文字运用", "现代文阅读"], ["文言文阅读", "古诗词鉴赏"], ["现代文阅读", "写作"], ["古诗词鉴赏", "写作"]],
+  "英语": [["词汇", "语法"], ["词汇", "阅读理解"], ["语法", "完形填空"], ["阅读理解", "书面表达"]]
+};
+
+const contextKeywordTags = {
+  "数学": [["函数", ["函数"]], ["二次", ["二次函数"]], ["导数", ["导数"]], ["概率", ["概率统计"]], ["数列", ["数列"]], ["三角", ["三角函数"]], ["压轴", ["综合应用"]]],
+  "物理": [["运动", ["运动学"]], ["力学", ["牛顿运动定律", "机械能"]], ["电路", ["电路"]], ["电磁", ["电磁学"]], ["压轴", ["综合应用"]]],
+  "化学": [["物质的量", ["物质的量"]], ["离子", ["离子反应"]], ["氧化还原", ["氧化还原反应"]], ["平衡", ["化学平衡"]]],
+  "生物": [["细胞", ["细胞结构"]], ["遗传", ["遗传规律"]], ["稳态", ["稳态与调节"]], ["生态", ["生态系统"]]],
+  "历史": [["史料", ["史料实证"]], ["近代", ["中国近代史", "世界近代史"]], ["现代", ["中国现代史"]], ["工业革命", ["工业革命"]]],
+  "地理": [["地球运动", ["地球运动"]], ["大气", ["大气运动"]], ["农业", ["农业区位"]], ["城市", ["城市化"]], ["区域", ["区域可持续发展"]]],
+  "政治": [["经济", ["市场经济"]], ["民主", ["民主政治"]], ["法治", ["依法治国"]], ["哲学", ["哲学原理"]], ["文化", ["文化传承"]]],
+  "语文": [["语言文字", ["语言文字运用"]], ["现代文", ["现代文阅读"]], ["文言", ["文言文阅读"]], ["古诗", ["古诗词鉴赏"]], ["作文", ["写作"]], ["写作", ["写作"]]],
+  "英语": [["词汇", ["词汇"]], ["语法", ["语法"]], ["阅读", ["阅读理解"]], ["完形", ["完形填空"]], ["作文", ["书面表达"]], ["写作", ["书面表达"]]]
+};
+
+function contextTagsForSubject(subject, context) {
+  if (!context) return [];
+  const matches = [];
+  for (const [keyword, tags] of contextKeywordTags[subject] || []) {
+    if (context.includes(keyword)) matches.push(...tags);
+  }
+  return [...new Set(normalizeKnowledgeTags(subject, matches))];
+}
+
+function prerequisiteRouteTags(edges, targets) {
+  const parents = new Map();
+  for (const [source, target] of edges) {
+    if (!parents.has(target)) parents.set(target, []);
+    parents.get(target).push(source);
+  }
+  const route = new Set();
+  function visit(tag) {
+    for (const parent of parents.get(tag) || []) {
+      if (route.has(parent)) continue;
+      route.add(parent);
+      visit(parent);
+    }
+  }
+  targets.forEach(visit);
+  return route;
+}
+
+function scoreBandMidpoint(band) {
+  if (band === "600以上") return 630;
+  if (band === "500-599") return 550;
+  if (band === "400-499") return 450;
+  if (band === "400以下") return 360;
+  return null;
+}
+
 /**
  * 计算多维优先级分数：
  * - mastery_penalty: 掌握度越低分越高 (weak=50, reviewing=30, mastered=0)
@@ -188,6 +247,118 @@ recommendRouter.get("/recommend/path", requireAuth, (req, res) => {
   const dueCount = db.prepare("SELECT COUNT(*) AS cnt FROM review_tasks WHERE user_id = ? AND scheduled_date <= ? AND status = 'pending'").get(req.user.id, today).cnt;
 
   res.json(ok({ items, due_review_count: Number(dueCount) }));
+});
+
+// ——— 关联知识图谱：画像目标 + 真实作答 + 前置依赖 ———
+recommendRouter.get("/recommend/graph", requireAuth, (req, res) => {
+  const allowedSubjects = req.user.subjects?.length ? req.user.subjects : [req.user.exam_track || "数学"];
+  const requested = typeof req.query.subject === "string" ? req.query.subject : null;
+  const subject = requested && allowedSubjects.includes(requested) ? requested : allowedSubjects[0];
+  const baseEdges = knowledgeDependencies[subject] || [];
+  const baseTags = [...new Set(baseEdges.flat())];
+  const contextTags = contextTagsForSubject(subject, req.user.learning_context);
+  const contextRouteTags = prerequisiteRouteTags(baseEdges, contextTags);
+  const attemptRows = db.prepare(`
+    SELECT pa.score, pq.knowledge_tags_json
+    FROM practice_attempts pa JOIN practice_questions pq ON pq.id = pa.practice_question_id
+    WHERE pa.user_id = ? AND pq.subject = ?
+    ORDER BY pa.created_at DESC LIMIT 120
+  `).all(req.user.id, subject);
+  const stats = new Map();
+  for (const row of attemptRows) {
+    for (const tag of normalizeKnowledgeTags(subject, parseJson(row.knowledge_tags_json, []))) {
+      if (!stats.has(tag)) stats.set(tag, { attempts: 0, total: 0 });
+      const item = stats.get(tag);
+      item.attempts += 1;
+      item.total += Number(row.score || 0);
+    }
+  }
+  const reviewRows = db.prepare(`
+    SELECT knowledge_tag, status, result FROM review_tasks
+    WHERE user_id = ? AND subject = ?
+  `).all(req.user.id, subject);
+  const reviewStats = new Map();
+  for (const row of reviewRows) {
+    if (!reviewStats.has(row.knowledge_tag)) reviewStats.set(row.knowledge_tag, { pending: 0, passed: 0 });
+    const item = reviewStats.get(row.knowledge_tag);
+    if (row.status === "pending") item.pending += 1;
+    if (row.status === "completed" && row.result === "correct") item.passed += 1;
+  }
+  const tags = [...new Set([...baseTags, ...stats.keys(), ...contextTags])].slice(0, 18);
+  const prerequisites = new Map(tags.map((tag) => [tag, baseEdges.filter(([, target]) => target === tag).map(([source]) => source)]));
+  const provisional = tags.map((tag) => {
+    const stat = stats.get(tag);
+    const reviews = reviewStats.get(tag) || { pending: 0, passed: 0 };
+    const score = stat ? Math.round(stat.total / stat.attempts) : 0;
+    return { tag, score, attempts: stat?.attempts || 0, pending_reviews: reviews.pending, passed_reviews: reviews.passed };
+  });
+  const mastered = new Set(provisional.filter((item) => item.score >= 80 || item.passed_reviews >= 2).map((item) => item.tag));
+  const currentScore = scoreBandMidpoint(req.user.current_score_band);
+  const goalGap = currentScore === null || req.user.target_score === null ? null : Math.max(0, req.user.target_score - currentScore);
+  const nodes = provisional.map((item) => {
+    const deps = prerequisites.get(item.tag) || [];
+    const depsReady = deps.every((tag) => mastered.has(tag));
+    const contextMatched = contextTags.includes(item.tag);
+    const contextRouteMatched = contextRouteTags.has(item.tag) && !contextMatched;
+    const status = mastered.has(item.tag) ? "mastered" : (item.attempts > 0 || contextMatched) && depsReady ? "active" : depsReady ? "ready" : "locked";
+    const priority = status === "mastered" ? 0 : Math.round((100 - item.score) + item.pending_reviews * 8 + Math.min(20, (goalGap || 0) / 10) + (contextMatched ? 25 : contextRouteMatched ? 15 : 0));
+    const question = db.prepare(`
+      SELECT id, title, exam_question_id FROM practice_questions
+      WHERE subject = ? AND knowledge_tags_json LIKE ?
+        AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)
+      ORDER BY CASE difficulty WHEN 'easy' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at DESC LIMIT 1
+    `).get(subject, `%${item.tag}%`, req.user.id);
+    const collection = question?.exam_question_id ? db.prepare(`
+      SELECT c.id FROM collection_questions cq
+      JOIN question_collections c ON c.id = cq.collection_id
+      WHERE cq.exam_question_id = ? AND (c.user_id = ? OR c.user_id IS NULL OR c.is_shared = 1)
+      ORDER BY CASE WHEN c.user_id = ? THEN 0 ELSE 1 END, c.created_at DESC LIMIT 1
+    `).get(question.exam_question_id, req.user.id, req.user.id) : null;
+    return {
+      id: `${subject}:${item.tag}`,
+      tag: item.tag,
+      subject,
+      score: item.score,
+      attempts: item.attempts,
+      pending_reviews: item.pending_reviews,
+      context_matched: contextMatched,
+      context_route: contextRouteMatched,
+      prerequisites: deps,
+      status,
+      priority,
+      recommended_question_id: question?.id || null,
+      recommended_question_title: question?.title || null,
+      recommended_collection_id: collection?.id || null,
+      reason: status === "mastered"
+        ? "已有稳定作答或复测证据，可以作为后续知识点的基础。"
+        : status === "locked"
+          ? contextMatched
+            ? `你在学情中提到了这一方向；先巩固 ${deps.filter((tag) => !mastered.has(tag)).join("、")}，再进入这一节点。`
+            : `先巩固 ${deps.filter((tag) => !mastered.has(tag)).join("、")}，再进入这一节点。`
+          : item.attempts
+            ? `最近 ${item.attempts} 次作答平均 ${item.score} 分，当前应优先补齐。`
+            : contextMatched
+              ? "你在学情描述中提到了这一方向，系统已将它加入当前重点。"
+              : contextRouteMatched
+                ? `为了你在学情中提到的 ${contextTags.join("、")}，先建立这个前置节点。`
+              : "前置知识已经就绪，可以开始建立这一节点。"
+    };
+  });
+  const focusNode = nodes.filter((item) => !["mastered", "locked"].includes(item.status)).sort((a, b) => b.priority - a.priority)[0] || null;
+  res.json(ok({
+    subject,
+    available_subjects: allowedSubjects,
+    goal: {
+      target_score: req.user.target_score,
+      current_score_band: req.user.current_score_band,
+      estimated_gap: goalGap,
+      learning_context: req.user.learning_context,
+      context_matches: contextTags
+    },
+    focus_node_id: focusNode?.id || null,
+    nodes,
+    edges: baseEdges.filter(([source, target]) => tags.includes(source) && tags.includes(target)).map(([source, target]) => ({ source: `${subject}:${source}`, target: `${subject}:${target}`, type: "prerequisite" }))
+  }));
 });
 
 // ——— 3. 获取某知识点的推荐题目（纯规则，AI 不参与调度）———

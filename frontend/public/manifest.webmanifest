@@ -3,16 +3,32 @@
   "short_name": "Studyoo",
   "description": "先独立作答，再 AI 评阅、订正、重做。真正的学习，不是获得更多答案，而是建立更深的理解。",
   "lang": "zh-CN",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#ede7d9",
   "theme_color": "#ede7d9",
+  "categories": ["education", "productivity"],
   "icons": [
     {
-      "src": "/brand/studyoo-black.png",
-      "sizes": "any",
+      "src": "/icons/studyoo-192.png",
+      "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icons/studyoo-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
+  ],
+  "shortcuts": [
+    { "name": "今日计划", "short_name": "今日", "url": "/today", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] },
+    { "name": "我的题库", "short_name": "题库", "url": "/library", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] },
+    { "name": "新发现", "short_name": "发现", "url": "/discover", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] }
   ]
 }

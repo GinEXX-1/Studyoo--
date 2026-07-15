@@ -1,7 +1,14 @@
 // Studyoo Service Worker：静态资源缓存优先，API 永远走网络。
 // 目标只有一个：加到主屏幕后二次打开秒开，弱网下壳先出来。
-const CACHE_NAME = "studyoo-static-v1";
-const PRECACHE = ["/", "/manifest.webmanifest", "/brand/studyoo-black.png", "/brand/studyoo-white.png"];
+const CACHE_NAME = "studyoo-static-v2";
+const PRECACHE = [
+  "/",
+  "/manifest.webmanifest",
+  "/brand/studyoo-black.png",
+  "/brand/studyoo-white.png",
+  "/icons/studyoo-192.png",
+  "/icons/studyoo-512.png"
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE)));

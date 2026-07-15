@@ -38,6 +38,11 @@ export const config = {
     region: (process.env.BACKUP_S3_REGION || "auto").trim()
   },
   inviteCode: (process.env.INVITE_CODE || "").trim(),
+  adminNicknames: (process.env.ADMIN_NICKNAMES || "").split(",").map((item) => item.trim()).filter(Boolean),
+  adminBootstrapToken: (process.env.ADMIN_BOOTSTRAP_TOKEN || "").trim(),
+  appVersion: (process.env.APP_VERSION || "2.4.0").trim(),
+  appTimezoneOffsetMinutes: Number(process.env.APP_TIMEZONE_OFFSET_MINUTES || 480),
+  discoveryAllowedHosts: (process.env.DISCOVERY_ALLOWED_HOSTS || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean),
   uploadDir: resolve(backendRoot, process.env.UPLOAD_DIR || "./uploads"),
   pdfRenderCommand: process.env.PDF_RENDER_COMMAND || "pdftoppm",
   pdfTextCommand: process.env.PDF_TEXT_COMMAND || "pdftotext",

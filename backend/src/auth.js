@@ -30,3 +30,12 @@ export function requireAuth(req, res, next) {
     return fail(res, 401, "AUTH_INVALID_TOKEN", "登录已过期，请重新登录。");
   }
 }
+
+export function requireAdmin(req, res, next) {
+  return requireAuth(req, res, () => {
+    if (!req.user.is_admin) {
+      return fail(res, 403, "ADMIN_REQUIRED", "仅管理员可以访问这个页面。");
+    }
+    next();
+  });
+}
