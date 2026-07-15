@@ -92,9 +92,9 @@ export default function HomePage() {
       <section className="dashboard-section library-preview">
         <div className="section-heading"><div><p className="eyebrow">你的题库</p><h2>最近学习</h2></div><button className="text-button" onClick={() => navigate("/library")}>管理题库</button></div>
         <div className="collection-shelf">
-          {collections.slice(0, 4).map((collection) => (
+          {collections.slice(0, 4).map((collection, index) => (
             <button className="shelf-item" key={collection.id} onClick={() => navigate(`/practice/${collection.id}`)}>
-              <CollectionCover collection={collection} /><strong>{collection.title}</strong><span>{collection.question_count} 题 · {collection.description || "继续建立你的理解"}</span>
+              <CollectionCover collection={collection} variant={index} /><strong>{collection.title}</strong><span>{collection.question_count} 题 · {collection.description || "继续建立你的理解"}</span>
             </button>
           ))}
           {!collections.length && <p className="empty-copy">还没有题库。去题库页导入一份试卷，开始你的第一轮练习。</p>}

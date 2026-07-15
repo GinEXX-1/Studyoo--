@@ -962,7 +962,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--purple); box-sha
 .capability-card strong { font-size: 24px; }
 .capability-cta { color: #fff; }
 
-.collection-shelf, .collection-grid { gap: 18px; }
+.collection-shelf, .collection-grid { gap: 38px 30px; }
 .collection-cover { aspect-ratio: 1.15; padding: 20px; border: 0; border-radius: 20px; }
 .collection-cover::after { display: none; }
 .collection-cover strong { font-family: inherit; font-size: 21px; }
@@ -1146,6 +1146,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--purple); box-sha
 .shape-quarter { border-radius: 0 100% 0 0; background: currentColor; }
 .shape-stripes { background: repeating-linear-gradient(45deg,currentColor 0 5px,transparent 5px 11px); }
 .shape-dots { background: radial-gradient(currentColor 3px,transparent 3.5px); background-size: 11px 11px; }
+.shape-bars { background: repeating-linear-gradient(90deg,currentColor 0 8px,transparent 8px 16px); }
 .collection-tile.active { box-shadow: none; }
 .mobile-detail-back { display: none; }
 
@@ -1269,4 +1270,76 @@ input:focus, select:focus, textarea:focus { border-color: var(--purple); box-sha
   .auth-card h1 { margin-bottom: 20px; font-size: 27px; }
   .auth-card-lede { margin: -12px 0 18px; }
   .auth-card .stack { gap: 13px; }
+}
+
+/* ── React Bits tilted geometric collection covers ─────────────────── */
+.collection-cover-frame {
+  width: 100%;
+  aspect-ratio: 1.15;
+  min-width: 0;
+}
+
+.collection-cover-frame.cover-large {
+  width: min(360px, 100%);
+}
+
+.collection-cover-frame .collection-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 20px;
+  box-shadow: 0 18px 42px rgba(26, 25, 21, .12);
+}
+
+.collection-cover-frame .cover-shape {
+  position: relative;
+  z-index: 2;
+  width: 42%;
+  height: 42%;
+  margin: 0;
+  opacity: .96;
+  filter: drop-shadow(0 10px 14px rgba(26, 25, 21, .1));
+}
+
+.collection-cover-frame .shape-diamond { width: 34%; height: 34%; }
+.collection-cover-frame .shape-ring { border-width: clamp(12px, 2.4vw, 28px); background: transparent; }
+.collection-cover-frame .shape-semi { height: 24%; align-self: center; }
+.collection-cover-frame .shape-quarter { transform: rotate(-12deg); }
+.collection-cover-frame .shape-stripes { width: 48%; height: 48%; background-size: 18px 18px; transform: rotate(-5deg); }
+.collection-cover-frame .shape-dots { width: 48%; height: 48%; background-size: 18px 18px; }
+
+.cover-orbit {
+  position: absolute;
+  display: block;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  opacity: .25;
+}
+
+.cover-orbit.orbit-a { top: 12%; right: 10%; width: 24%; aspect-ratio: 1; }
+.cover-orbit.orbit-b { left: 8%; bottom: 9%; width: 12%; aspect-ratio: 1; background: currentColor; opacity: .18; }
+.motif-triangle .orbit-a, .motif-plus .orbit-a { border-radius: 2px; transform: rotate(24deg); }
+.motif-diamond .orbit-b, .motif-quarter .orbit-b { border-radius: 2px; transform: rotate(45deg); }
+.motif-stripes .orbit-a, .motif-dots .orbit-a { width: 18%; }
+
+.collection-tile {
+  gap: 12px;
+  overflow: visible;
+}
+
+.collection-tile > strong { font-size: 15px; line-height: 1.4; }
+.collection-tile > span { font-size: 11px; }
+.collection-tile:focus-visible .collection-cover { outline: 3px solid var(--ink); outline-offset: 4px; }
+
+@media (max-width: 640px) {
+  .collection-shelf, .collection-grid { gap: 28px 18px; }
+  .collection-cover-frame { aspect-ratio: .95; }
+  .collection-cover-frame .collection-cover { border-radius: 18px; box-shadow: 0 12px 28px rgba(26, 25, 21, .1); }
+  .collection-cover-frame .cover-shape { width: 44%; height: 44%; }
+  .collection-cover-frame .shape-diamond { width: 35%; height: 35%; }
 }

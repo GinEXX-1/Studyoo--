@@ -1,6 +1,6 @@
 # Studyoo Design QA
 
-- source visual truth: `/Users/ginex/Downloads/Studyoo 20260714.zip`（`Studyoo.dc.html` 与 `.thumbnail`）
+- source visual truth: `/Users/ginex/Downloads/Studyoo 20260714.zip`（`Studyoo.dc.html` 与 `.thumbnail`）以及 `/Users/ginex/.codex/attachments/5aa9bdb4-8429-494b-b837-4ac10dbf4b19/pasted-text.txt`（React Bits `TiltedCard` 交互规范）
 - implementation: `http://localhost:4173/`
 - viewports: 1007×862 desktop, 390×844 mobile
 - states reviewed: login, workbench, library list/detail, parser, profile learning path, practice entry and answer composer
@@ -33,9 +33,17 @@
 - Login CTA is fully visible above the fold; register → logout → login was verified with a disposable QA account, then cleaned up.
 - Latest app reload produced no new application console errors. Earlier CORS errors were reproduced, fixed and retested.
 
+## Tilted question-bank cover verification
+
+- 1280×720: all 10 visible collections use distinct, text-free geometric cover motifs; grid gaps measure 30px horizontally and 38px vertically.
+- Pointer movement changes the cover to a 3D transform, confirming the spring-driven tilt interaction is active.
+- 390×844: the library remains a two-column grid with 18px horizontal and 28px vertical gaps, no horizontal overflow, and hover-only captions disabled.
+- Collection titles and metadata remain outside the artwork, preserving scanability and accessible button labels.
+- Browser console: no warnings or errors after the final desktop/mobile pass.
+
 ## Automated verification
 
-- `npm run build`: passed (111 modules).
+- `npm run build`: passed (515 modules).
 - `npm run smoke:backend`: passed full minimal backend chain.
 - `npm run test:practice-workflow --workspace backend`: passed.
 - `npm run test:ownership --workspace backend`: passed.
