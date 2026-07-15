@@ -10,6 +10,7 @@ export default function AuthPanel({ onSignedIn }) {
   const [password, setPassword] = useState("");
   const [grade, setGrade] = useState("高一");
   const [inviteCode, setInviteCode] = useState("");
+  const [contact, setContact] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function submit(event) {
@@ -18,7 +19,7 @@ export default function AuthPanel({ onSignedIn }) {
     try {
       const data = await apiRequest(mode === "login" ? "/auth/login" : "/auth/register", {
         method: "POST",
-        body: JSON.stringify({ nickname, password, grade, invite_code: inviteCode })
+        body: JSON.stringify({ nickname, password, grade, invite_code: inviteCode, contact })
       });
       toast.success(mode === "login" ? "登录成功" : "注册成功");
       onSignedIn(data.user);
@@ -58,9 +59,11 @@ export default function AuthPanel({ onSignedIn }) {
             <>
               <label>年级<select value={grade} onChange={(event) => setGrade(event.target.value)}>{grades.map((item) => <option key={item}>{item}</option>)}</select></label>
               <label>邀请码<input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="内测邀请码（未开启可留空）" /></label>
+              <label>联系方式（选填）<input value={contact} onChange={(event) => setContact(event.target.value)} placeholder="微信 / QQ / 手机号，忘记密码时用于找回" /></label>
             </>
           )}
           <button className="primary" disabled={loading}>{loading ? "处理中..." : mode === "login" ? "进入 Studyoo" : "创建账号"}</button>
+          {mode === "login" && <p className="auth-forgot-hint">忘记密码？联系发你邀请码的管理员，人工核验后重置。</p>}
         </form>
       </section>
     </main>

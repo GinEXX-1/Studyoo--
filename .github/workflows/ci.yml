@@ -1,0 +1,33 @@
+# Studyoo CI：每次 push/PR 跑全部守护栏测试 + 前端构建。
+# 本地能过、CI 也过，才允许合并——守护栏不再依赖"记得在本地跑"。
+name: CI
+
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: 安装 PDF 解析依赖
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: npm ci
+      - name: 越权测试（19 项）
+        run: npm run test:ownership --workspace backend
+      - name: 守护栏测试
+        run: npm run test:guardrails --workspace backend
+      - name: 练习流程测试
+        run: npm run test:practice-workflow --workspace backend
+      - name: 导入编辑测试
+        run: npm run test:import-editing --workspace backend
+      - name: 重做机制测试（26 项，mock AI）
+        run: npm run test:redo --workspace backend
+      - name: 前端构建
+        run: npm run build --workspace frontend

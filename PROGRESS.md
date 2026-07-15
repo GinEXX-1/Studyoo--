@@ -98,8 +98,8 @@
 | 2026-07-05 | 图片上传路由 `POST /questions/image` 未实现 | Codex | ✅ 已解决 |
 | 2026-07-12 | 根目录存在分裂的 studyoo.db + uploads（历史遗留），处置方案见《项目资产与文件结构.md》 | GinEXX | 待决定 |
 | 2026-07-13 | 生产环境种子试卷图片/PDF 404；无数据库备份；AI 成本无全局护栏；无密码找回 | Claude | ✅ 已修复（待部署：Railway 设 INVITE_CODE 后 redeploy） |
-| 2026-07-13 | 备份仅落在 /data 卷内，异地备份（对象存储）未做 | 待分配 | 待排期 |
-| 2026-07-12 | 重做机制尚未实现，计划见《重做机制开发计划.md》 | 待分配 | 待评审 |
+| 2026-07-13 | 备份仅落在 /data 卷内，异地备份（对象存储）未做 | Claude | ✅ 已解决（配置 BACKUP_S3_* 四项环境变量即启用，S3 兼容/R2，零新依赖） |
+| 2026-07-12 | 重做机制尚未实现，计划见《重做机制开发计划.md》 | Claude | ✅ 已实现（M1-M4 全部完成，26 项 e2e 测试通过） |
 
 ---
 
@@ -107,6 +107,7 @@
 
 | 日期 | 更新内容 | 更新人 |
 |---|---|---|
+| 2026-07-15 | **v2.3 按《优化重构升级方案 2026-07-15》完成阶段 0 + 阶段 1 主体 + 阶段 2 快赢项**：①**重做机制 M1-M4**（订正状态机 wrong→corrected→redo_pending→redo_passed/failed；`POST /practice/questions/:id/corrections`、`?mode=redo` 遮蔽题面（后端保证不下发答案/历史）、重做提交对比评阅 + progress_note、redo_passed 联动间隔复习链、订正历史 `GET :id/attempts`、个人页订正率/重做通过率；前端订正面板/重做横幅/分数对比卡）②**最小事件埋点**（events 表 + `POST /events` 白名单 + 服务端 9 类事件 + `npm run report:funnel` 漏斗报表含次日回访）③**AI 输出形状校验**（ai-schemas.js 手写校验器，评阅/解析/组卷/路径全部过闸，失败带错误自动重试一次再报错）④**token 成本计量**（ai_usage 记 tokens，AsyncLocalStorage 归账到用户；AI_DAILY_TOKEN_LIMIT / AI_GLOBAL_DAILY_TOKEN_LIMIT 预算护栏，0=不启用）⑤**备份异地推送**（手写 SigV4 PUT，BACKUP_S3_* 配置即启用，本地+异地双保险）⑥**密码找回兜底**（注册可选联系方式存 users.contact，登录页找回提示）⑦**PWA**（manifest + service worker：静态缓存优先、API 永远走网络，可加主屏）⑧**能力地图 v1**（个人页知识点×掌握度三级配色：已掌握/巩固中/薄弱）⑨**复合索引 6 条**（v2.1 审计 P1 落地）⑩**GitHub Actions CI**（5 套测试 + 前端构建）。新增 `npm run test:redo`（26 项，mock AI 不耗额度）；全量回归：ownership/guardrails/practice-workflow/import-editing/redo 全过 + 前端构建通过；浏览器实测重做全链路（45→88 对比卡、遮蔽模式、订正面板、能力地图、漏斗报表）。 | Claude |
 | 2026-07-14 | **v2.2 拍照导入 + 共享题库 + 数据囤积**：①拍照导入（题库页新 tab：拍照/选图 → 视觉 AI 识别 → 校对 → 入库个人「拍照导入」题库；照片与 AI 原始结果存 photo_uploads）②共享题库（题库详情"共享"开关，共享后全站可见可练，编辑/删除仍限 owner；被他人练过的题库禁删）③微调语料囤积（候选题首次人工校对前自动快照 AI 原始识别 → ai_snapshot_json；拍照同理）④评阅提示词加评分锚点（90-100/80-89/60-79/40-59/0-39 明确标准，is_correct=score≥80）⑤移动端修复：题库详情窄屏被主题重构回归挤成半栏（styles.css 尾部重申单列）、详情操作行改 flex 适配 4 按钮、他人共享题库不再显示编辑/删除 ⑥守护栏测试扩至 19 项（共享可见性/越权/拍照幂等/ASCII ID）。真实 AI e2e：裁切图当照片识别导数大题成功（置信度 0.9）。 | Claude |
 | 2026-07-14 | **带图题目修复 + 数学公式输入**：①识别新增 `has_figure` 判定并全链路贯穿（候选/真题/练习题三表加列），含图题在做题页内联常显裁切原图（不再折叠），导入校对页可手动纠正"含图"标记——修复"带图题丢图/查看原卷只给整页"②做题页新增数学公式符号面板 `MathKeyboard`（分数/根号/上下标等 20 键，点击在光标处插入 LaTeX + 实时预览）——修复"键盘打不出公式"。浏览器实测通过；越权 19 项 + 守护栏 6 项回归通过。详见《下一阶段功能计划 2026-07-14.md》 | Claude |
 | 2026-07-13 | **生产四断点修复**：①种子资源随镜像分发（backend/seed-assets），启动自动铺进上传目录，修复公共卷图片/PDF 404 ②数据库每日自动备份（VACUUM INTO + 保留 14 份，生产自启，`npm run backup:db` 手动）③全站 AI 日配额 AI_GLOBAL_DAILY_LIMIT（默认 200，防批量注册烧余额）+ 注册邀请码 INVITE_CODE（前端已加输入框）④管理员重置密码 `npm run admin:reset-password`。新增 `npm run test:guardrails`（6 项）；越权测试 19 项全过；前端构建通过。**部署动作：Railway 设置 INVITE_CODE 环境变量后 redeploy。** | Claude |

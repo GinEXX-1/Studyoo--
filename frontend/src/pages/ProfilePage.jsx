@@ -112,10 +112,14 @@ export default function ProfilePage({ user, onUserUpdated, onLogout }) {
   return (
     <div className="page-stack">
       <section className="profile-hero"><div className="avatar">{user.nickname.slice(0, 1).toUpperCase()}</div><div><p className="eyebrow">Personal</p><h1>{user.nickname}</h1><p>{user.grade} · 已加入 Studyoo</p></div></section>
-      <section className="profile-stats"><Stat value={stats?.summary.total_attempts || 0} label="累计作答" /><Stat value={`${stats?.summary.correct_rate || 0}%`} label="正确率" /><Stat value={stats?.summary.average_score || 0} label="平均分" /><Stat value={stats?.summary.collection_count || 0} label="个人题库" /></section>
+      <section className="profile-stats"><Stat value={stats?.summary.total_attempts || 0} label="累计作答" /><Stat value={`${stats?.summary.correct_rate || 0}%`} label="正确率" /><Stat value={stats?.summary.average_score || 0} label="平均分" /><Stat value={stats?.summary.collection_count || 0} label="个人题库" /><Stat value={`${stats?.corrections?.correction_rate || 0}%`} label="订正率" /><Stat value={`${stats?.corrections?.redo_pass_rate || 0}%`} label="重做通过率" /></section>
       <section className="profile-grid profile-overview-grid">
         <div className="learning-graph-panel"><div className="section-heading"><div><p className="eyebrow">Learning Map</p><h2>个性化学习路径</h2></div><span className="section-note">点击节点查看</span></div><LearningPathGraph abilities={stats?.abilities || []} onStart={() => navigate(learningPath.today[0] ? `/review/${learningPath.today[0].id}` : "/library")} /></div>
-        <div className="ability-panel"><div className="section-heading"><div><p className="eyebrow">Ability</p><h2>知识点能力</h2></div></div>{stats?.abilities.length ? stats.abilities.map((item) => <div className="ability-row" key={item.tag}><div><strong>{item.tag}</strong><span>{item.attempts} 次作答</span></div><div className="ability-track"><span style={{ width: `${item.average_score}%` }} /></div><b>{item.average_score}</b></div>) : <p className="empty-copy">完成几道题后，这里会形成你的能力图谱。</p>}</div>
+        <div className="ability-panel"><div className="section-heading"><div><p className="eyebrow">Ability Map</p><h2>能力地图</h2></div><span className="section-note">订正与重做通过后，颜色会变化</span></div>{stats?.abilities.length ? stats.abilities.map((item) => {
+          const mastery = item.average_score >= 80 ? "mastered" : item.average_score >= 60 ? "progressing" : "weak";
+          const masteryLabel = mastery === "mastered" ? "已掌握" : mastery === "progressing" ? "巩固中" : "薄弱";
+          return <div className={`ability-row ${mastery}`} key={item.tag}><div><strong>{item.tag}</strong><span>{item.attempts} 次作答 · {masteryLabel}</span></div><div className="ability-track"><span className={mastery} style={{ width: `${item.average_score}%` }} /></div><b>{item.average_score}</b></div>;
+        }) : <p className="empty-copy">完成几道题后，这里会形成你的能力地图。</p>}</div>
       </section>
 
       <section className="recent-panel"><div className="section-heading"><div><p className="eyebrow">Recent</p><h2>最近练习</h2></div></div>{stats?.recent_attempts.length ? stats.recent_attempts.map((item) => <div className="recent-row" key={item.id}><div><strong>{item.title}</strong><span>{new Date(item.created_at).toLocaleDateString("zh-CN")}</span></div><b>{item.score}</b></div>) : <p className="empty-copy">还没有练习记录。</p>}</section>

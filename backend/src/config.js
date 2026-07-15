@@ -26,6 +26,17 @@ export const config = {
   aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 60000),
   aiDailyLimit: Number(process.env.AI_DAILY_LIMIT || 30),
   aiGlobalDailyLimit: Number(process.env.AI_GLOBAL_DAILY_LIMIT || 200),
+  // 按 token 成本的配额（0 = 不启用）。次数护栏防滥用频率，token 护栏防成本。
+  aiDailyTokenLimit: Number(process.env.AI_DAILY_TOKEN_LIMIT || 0),
+  aiGlobalDailyTokenLimit: Number(process.env.AI_GLOBAL_DAILY_TOKEN_LIMIT || 0),
+  // 备份异地推送（S3 兼容，如 Cloudflare R2）。四项都配置才启用。
+  backupS3: {
+    endpoint: (process.env.BACKUP_S3_ENDPOINT || "").trim(),
+    bucket: (process.env.BACKUP_S3_BUCKET || "").trim(),
+    accessKeyId: (process.env.BACKUP_S3_ACCESS_KEY_ID || "").trim(),
+    secretAccessKey: (process.env.BACKUP_S3_SECRET_ACCESS_KEY || "").trim(),
+    region: (process.env.BACKUP_S3_REGION || "auto").trim()
+  },
   inviteCode: (process.env.INVITE_CODE || "").trim(),
   uploadDir: resolve(backendRoot, process.env.UPLOAD_DIR || "./uploads"),
   pdfRenderCommand: process.env.PDF_RENDER_COMMAND || "pdftoppm",

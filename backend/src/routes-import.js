@@ -14,7 +14,8 @@ import {
   canonicalTagsForSubject,
   nowIso,
   normalizeKnowledgeTags,
-  parseJson
+  parseJson,
+  recordEvent
 } from "./db.js";
 import { requireAuth } from "./auth.js";
 import { AppError, asyncRoute, fail, ok } from "./http.js";
@@ -349,6 +350,7 @@ importRouter.post("/import/pipeline/upload", requireAuth, asyncRoute(async (req,
 
   const task = toImportTask(db.prepare("SELECT * FROM import_tasks WHERE id = ?").get(taskId));
   const pages = db.prepare("SELECT * FROM import_pages WHERE task_id = ? ORDER BY page_number").all(taskId).map(toImportPage);
+  recordEvent(req.user.id, "import_started", { task_id: taskId, total_pages: pages.length });
   res.status(201).json(ok({ task, pages }));
 }));
 
@@ -1109,6 +1111,8 @@ importRouter.post("/import/pipeline/candidates/:candidateId/confirm", requireAut
     throw error;
   }
 
+  recordEvent(req.user.id, "import_succeeded", { confirmed_count: 1, mode: "single" });
+
   res.json(ok({
     candidate: toQuestionCandidate(db.prepare("SELECT * FROM question_candidates WHERE id = ?").get(candidate.id)),
     exam_question_id: questionId,
@@ -1210,6 +1214,11 @@ importRouter.post("/import/pipeline/candidates/batch-confirm", requireAuth, asyn
       db.prepare("UPDATE import_tasks SET status = 'completed', updated_at = ? WHERE id = ?").run(nowIso(), task.id);
     }
   }
+
+  recordEvent(req.user.id, "import_succeeded", {
+    confirmed_count: results.filter((item) => item.status === "confirmed").length,
+    failed_count: results.filter((item) => item.status === "failed").length
+  });
 
   res.json(ok({ results }));
 }));

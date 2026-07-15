@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { MathText } from "../components/MathText.jsx";
 import MathKeyboard from "../components/MathKeyboard.jsx";
-import { apiRequest } from "../lib/api.js";
+import { apiRequest, trackEvent } from "../lib/api.js";
 
 export default function PracticePage() {
   const { id } = useParams();
@@ -25,12 +25,17 @@ export default function PracticePage() {
   const [followContext, setFollowContext] = useState(null);
   const [followQuestion, setFollowQuestion] = useState("");
   const [followMessages, setFollowMessages] = useState([]);
+  const [correction, setCorrection] = useState(null);
+  const [correctionNote, setCorrectionNote] = useState("");
+  const [redoMode, setRedoMode] = useState(false);
+  const [previousAttempt, setPreviousAttempt] = useState(null);
   const reviewRef = useRef(null);
   const questionContentRef = useRef(null);
   const answerRef = useRef(null);
 
   useEffect(() => {
     apiRequest(`/collections/${id}`).then(setDetail).catch((error) => toast.error(error.message));
+    trackEvent("practice_opened", { collection_id: id });
   }, [id]);
 
   const current = detail?.questions[index];
@@ -44,8 +49,14 @@ export default function PracticePage() {
     setShowReview(Boolean(attempts[`practice-${current.id}`]));
     setFollowContext(null);
     setFollowMessages([]);
+    setRedoMode(false);
+    setPreviousAttempt(null);
+    setCorrectionNote("");
     apiRequest(`/practice/questions/practice-${current.id}`)
-      .then((result) => setData({ ...result, latest_attempt: attempts[`practice-${current.id}`] || null }))
+      .then((result) => {
+        setData({ ...result, latest_attempt: attempts[`practice-${current.id}`] || null });
+        setCorrection(result.correction || null);
+      })
       .catch((error) => toast.error(error.message))
       .finally(() => setLoading(""));
   }, [current?.id, gradingMode]);
@@ -70,16 +81,85 @@ export default function PracticePage() {
     }
   }
 
-  async function gradeQuestion(questionId, value) {
+  async function gradeQuestion(questionId, value, redoOfAttemptId) {
     return apiRequest(`/practice/questions/${questionId}/attempt`, {
       method: "POST",
-      body: JSON.stringify({ answer_text: value, session_id: sessionId })
+      body: JSON.stringify({
+        answer_text: value,
+        session_id: sessionId,
+        ...(redoOfAttemptId ? { redo_of_attempt_id: redoOfAttemptId } : {})
+      })
     });
+  }
+
+  // ——— 重做机制 ———
+  async function markCorrected(startNow) {
+    if (!data?.question) return;
+    setLoading("correction");
+    try {
+      const result = await apiRequest(`/practice/questions/${data.question.id}/corrections`, {
+        method: "POST",
+        body: JSON.stringify({ note: correctionNote.trim() || undefined })
+      });
+      setCorrection(result);
+      if (startNow) {
+        await enterRedo();
+      } else {
+        toast.success("已记录订正。建议 30 分钟后回来重做这道题。");
+      }
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function enterRedo() {
+    if (!data?.question) return;
+    setLoading("question");
+    try {
+      const result = await apiRequest(`/practice/questions/${data.question.id}?mode=redo`);
+      setData({ question: result.question, latest_attempt: null });
+      setCorrection(result.correction || null);
+      setRedoMode(true);
+      setShowReview(false);
+      setAnswerText("");
+      setPreviousAttempt(null);
+      window.scrollTo({ top: 0, behavior: "auto" });
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function submitRedo() {
+    const parentId = attempts[data.question.id]?.id || data?.latest_attempt?.id;
+    setLoading("attempt");
+    try {
+      const result = await gradeQuestion(data.question.id, answerText, parentId);
+      setAttempts((items) => ({ ...items, [data.question.id]: result.attempt }));
+      setData({ question: result.question, latest_attempt: result.attempt });
+      setCorrection(result.correction || null);
+      setPreviousAttempt(result.previous_attempt || null);
+      setRedoMode(false);
+      setShowReview(true);
+      queryClient.invalidateQueries({ queryKey: ["profile-stats"] });
+      setTimeout(() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setLoading("");
+    }
   }
 
   async function submit(event) {
     event.preventDefault();
     if (!data?.question || !answerText.trim()) return;
+    if (redoMode) {
+      await submitRedo();
+      return;
+    }
     const nextAnswers = { ...answers, [current.id]: answerText.trim() };
     setAnswers(nextAnswers);
 
@@ -98,6 +178,7 @@ export default function PracticePage() {
       const result = await gradeQuestion(data.question.id, answerText);
       setAttempts((items) => ({ ...items, [data.question.id]: result.attempt }));
       setData({ question: result.question, latest_attempt: result.attempt });
+      setCorrection(result.correction || null);
       setShowReview(true);
       if (result.cached) toast.success("已从 AI 记忆读取评阅");
       queryClient.invalidateQueries({ queryKey: ["profile-stats"] });
@@ -216,6 +297,7 @@ export default function PracticePage() {
         {loading === "question" && <div className="loading-card"><div className="loading-spinner" /><p>正在加载题目...</p></div>}
 
         {question && loading !== "batch" && <>
+          {redoMode && <div className="redo-banner"><strong>重做模式</strong><span>上次作答与参考答案已隐藏，独立完成后再对比。</span></div>}
           <div className="question-card">
             <div className="question-meta"><span className="question-num">第 {current.question_number} 题</span><span className="question-type">{current.question_type}</span><div className="question-tags">{question.knowledge_tags.map((tag) => <span key={tag}>{tag}</span>)}</div></div>
             <h1 className="question-title">{question.title}</h1>
@@ -225,8 +307,8 @@ export default function PracticePage() {
             {question.content_image_url && !question.has_figure && <div className="original-paper-mobile"><button className="ghost" onClick={() => setShowOriginal((value) => !value)}>{showOriginal ? "收起原卷" : "查看原卷"}</button>{showOriginal && <div className="paper-image-wrapper"><img src={question.content_image_url} alt={`原卷第 ${current.page_number || ""} 页`} /></div>}</div>}
           </div>
 
-          {!showReview ? <div className="answer-card"><h2>我的作答</h2><form onSubmit={submit}><MathKeyboard targetRef={answerRef} value={answerText} onChange={setAnswerText} /><textarea ref={answerRef} rows="8" value={answerText} onChange={(event) => setAnswerText(event.target.value)} placeholder="写下思路、步骤和答案。数学符号点上方按钮插入，公式写在 $…$ 之间。" />{answerText.includes("$") && <div className="answer-preview"><span className="answer-preview-label">公式预览</span><MathText text={answerText} /></div>}<button className="primary" disabled={!answerText.trim() || loading === "attempt"}>{loading === "attempt" ? "AI 评阅中..." : gradingMode === "unified" && index + 1 < detail.questions.length ? "保存并继续" : gradingMode === "unified" ? "提交整套题" : "提交作答"}</button></form></div> :
-            <div ref={reviewRef} className="review-card"><div className="review-title-row"><h2>评阅结果</h2>{attempt?.from_cache && <span className="memory-badge">AI 记忆</span>}</div>{attempt && <><div className="score-section"><strong className="score-value">{attempt.score}</strong><span className={`score-status ${attempt.is_correct ? "correct" : "wrong"}`}>{attempt.is_correct ? "基本掌握" : "需要订正"}</span></div><div className="feedback-section"><MathText text={attempt.feedback_text} /><button className="text-button" onClick={() => openFollowUp("feedback", attempt.feedback_text)}>追问</button></div>{attempt.step_breakdown?.map((step) => <div key={step.step_number} className="step-card"><span className="step-number">{step.step_number}</span><div><MathText text={step.explanation} /><button className="text-button" onClick={() => openFollowUp("step", step.explanation)}>追问这一步</button></div></div>)}<div className="next-action-card">{attempt.next_action}</div>{question.official_answer_text && !question.official_answer_text.startsWith("原 PDF 未附") && <div className="reference-answer-mobile"><strong>参考答案</strong><MathText text={question.official_answer_text} /><button className="text-button" onClick={() => openFollowUp("answer", question.official_answer_text)}>追问答案</button></div>}<div className="review-actions"><button className="ghost" onClick={() => openFollowUp("analysis", attempt.feedback_text)}>继续追问</button><button className="primary" onClick={next}>{index + 1 >= detail.questions.length ? "完成这套题" : "下一题"}</button></div></>}</div>}
+          {!showReview ? <div className="answer-card"><h2>我的作答</h2><form onSubmit={submit}><MathKeyboard targetRef={answerRef} value={answerText} onChange={setAnswerText} /><textarea ref={answerRef} rows="8" value={answerText} onChange={(event) => setAnswerText(event.target.value)} placeholder="写下思路、步骤和答案。数学符号点上方按钮插入，公式写在 $…$ 之间。" />{answerText.includes("$") && <div className="answer-preview"><span className="answer-preview-label">公式预览</span><MathText text={answerText} /></div>}<button className="primary" disabled={!answerText.trim() || loading === "attempt"}>{loading === "attempt" ? (redoMode ? "AI 对比评阅中..." : "AI 评阅中...") : redoMode ? "提交重做" : gradingMode === "unified" && index + 1 < detail.questions.length ? "保存并继续" : gradingMode === "unified" ? "提交整套题" : "提交作答"}</button></form></div> :
+            <div ref={reviewRef} className="review-card"><div className="review-title-row"><h2>{attempt?.is_redo ? "重做评阅" : "评阅结果"}</h2>{attempt?.from_cache && <span className="memory-badge">AI 记忆</span>}</div>{attempt && <>{attempt.is_redo && previousAttempt ? <div className="redo-compare"><div className="redo-compare-scores"><div><small>上次</small><strong>{previousAttempt.score}</strong></div><span className="redo-arrow">→</span><div><small>这次</small><strong className={attempt.is_correct ? "correct" : "wrong"}>{attempt.score}</strong></div><span className={`score-status ${attempt.is_correct ? "correct" : "wrong"}`}>{attempt.is_correct ? "重做通过" : "仍需订正"}</span></div>{attempt.progress_note && <div className="progress-note"><small>进步对比</small><MathText text={attempt.progress_note} /></div>}</div> : <div className="score-section"><strong className="score-value">{attempt.score}</strong><span className={`score-status ${attempt.is_correct ? "correct" : "wrong"}`}>{attempt.is_correct ? "基本掌握" : "需要订正"}</span></div>}<div className="feedback-section"><MathText text={attempt.feedback_text} /><button className="text-button" onClick={() => openFollowUp("feedback", attempt.feedback_text)}>追问</button></div>{attempt.step_breakdown?.map((step) => <div key={step.step_number} className="step-card"><span className="step-number">{step.step_number}</span><div><MathText text={step.explanation} /><button className="text-button" onClick={() => openFollowUp("step", step.explanation)}>追问这一步</button></div></div>)}<div className="next-action-card">{attempt.next_action}</div>{!attempt.is_correct && <div className="correction-panel">{correction?.correction_status === "redo_pending" ? <><p className="correction-hint">已记录订正。{correction.redo_available_at && new Date(correction.redo_available_at) > new Date() ? "建议 30 分钟后重做（间隔效应记得更牢），也可以立即开始。" : "现在可以重做验证了。"}</p><button className="primary" disabled={loading === "question"} onClick={enterRedo}>开始重做（隐藏上次作答）</button></> : <>{(correction?.redo_count || 0) >= 3 && <p className="correction-hint warning">这道题已重做 {correction.redo_count} 次仍未通过，建议先到「解析」入口把关键步骤逐步拆开，再回来重做。</p>}<p className="correction-hint">看懂反馈后，用一句话记下你订正的理解，然后合上解析重做一遍：</p><textarea className="correction-note" rows="2" value={correctionNote} onChange={(event) => setCorrectionNote(event.target.value)} placeholder="例：应取第 3 个数而不是平均值（选填）" /><div className="correction-actions"><button className="primary" disabled={loading === "correction"} onClick={() => markCorrected(false)}>我已订正，稍后重做</button><button className="ghost" disabled={loading === "correction"} onClick={() => markCorrected(true)}>立即重做</button></div></>}</div>}{question.official_answer_text && !question.official_answer_text.startsWith("原 PDF 未附") && <div className="reference-answer-mobile"><strong>参考答案</strong><MathText text={question.official_answer_text} /><button className="text-button" onClick={() => openFollowUp("answer", question.official_answer_text)}>追问答案</button></div>}<div className="review-actions"><button className="ghost" onClick={() => openFollowUp("analysis", attempt.feedback_text)}>继续追问</button><button className="primary" onClick={next}>{index + 1 >= detail.questions.length ? "完成这套题" : "下一题"}</button></div></>}</div>}
 
           {followContext && <section className="follow-up-panel"><div className="follow-up-heading"><strong>追问</strong><button className="text-button" onClick={() => setFollowContext(null)}>关闭</button></div>{followContext.text && <blockquote><MathText text={followContext.text} /></blockquote>}{followMessages.map((message, messageIndex) => <div className="follow-up-message" key={messageIndex}><p>{message.question}</p><MathText text={message.answer} /></div>)}<form onSubmit={askFollowUp}><textarea rows="3" value={followQuestion} onChange={(event) => setFollowQuestion(event.target.value)} placeholder="具体说说哪里没有理解" /><button className="primary" disabled={!followQuestion.trim() || loading === "follow-up"}>{loading === "follow-up" ? "思考中..." : "发送追问"}</button></form></section>}
         </>}

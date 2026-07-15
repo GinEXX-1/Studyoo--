@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "sonner";
-import { apiRequest } from "./lib/api.js";
+import { apiRequest, trackEvent } from "./lib/api.js";
 import AuthPanel from "./components/AuthPanel.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import HomePage from "./pages/HomePage.jsx";
@@ -74,7 +74,10 @@ function App() {
 
   useEffect(() => {
     apiRequest("/users/me")
-      .then(setUser)
+      .then((me) => {
+        setUser(me);
+        trackEvent("app_opened", {});
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

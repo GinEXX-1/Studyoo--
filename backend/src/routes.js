@@ -16,9 +16,11 @@ import {
   toPracticeAttempt,
   toPracticeQuestion,
   toQuestionCollection,
+  toPracticeCorrection,
   toQuestion,
   toQuestionProfile,
-  toUser
+  toUser,
+  recordEvent
 } from "./db.js";
 import { requireAuth, signToken } from "./auth.js";
 import { AppError, asyncRoute, fail, ok } from "./http.js";
@@ -27,6 +29,7 @@ import {
   buildQuestionCollection,
   ensureAiConfigured,
   evaluatePracticeAttempt,
+  evaluatePracticeRedo,
   generateAnswer,
   generateFollowUp,
   generatePracticeFollowUp,
@@ -271,6 +274,8 @@ router.post("/auth/register", authRateLimiter(), asyncRoute(async (req, res) => 
   if (password.length < 6 || password.length > 128) {
     throw new AppError(400, "VALIDATION_ERROR", "密码长度应介于 6 到 128 位之间。");
   }
+  // 可选联系方式：忘记密码时管理员据此人工核验身份后重置（内测期唯一找回途径）
+  const contact = typeof req.body.contact === "string" ? req.body.contact.trim().slice(0, 100) : "";
 
   const exists = db.prepare("SELECT id FROM users WHERE nickname = ?").get(nickname);
   if (exists) {
@@ -281,11 +286,12 @@ router.post("/auth/register", authRateLimiter(), asyncRoute(async (req, res) => 
   const createdAt = nowIso();
   const passwordHash = await bcrypt.hash(password, 10);
   db.prepare(`
-    INSERT INTO users (id, nickname, password_hash, grade, subjects_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(userId, nickname, passwordHash, grade, JSON.stringify([]), createdAt);
+    INSERT INTO users (id, nickname, password_hash, grade, subjects_json, created_at, contact)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(userId, nickname, passwordHash, grade, JSON.stringify([]), createdAt, contact || null);
 
   const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId));
+  recordEvent(userId, "register", { grade, has_contact: Boolean(contact) });
   const token = signToken(user);
   res.cookie("token", token, { httpOnly: true, sameSite: "strict", secure: config.secureCookie, maxAge: 604800000, path: "/" });
   res.status(201).json(ok({ user, token }));
@@ -301,10 +307,23 @@ router.post("/auth/login", authRateLimiter(), asyncRoute(async (req, res) => {
   }
 
   const user = toUser(row);
+  recordEvent(user.id, "login", {});
   const token = signToken(user);
   res.cookie("token", token, { httpOnly: true, sameSite: "strict", secure: config.secureCookie, maxAge: 604800000, path: "/" });
   res.json(ok({ user, token }));
 }));
+
+// ——— 最小事件埋点：前端只上报"到达了哪一步"，具名白名单防刷 ———
+const CLIENT_EVENT_NAMES = new Set(["app_opened", "practice_opened", "import_opened", "parser_opened"]);
+router.post("/events", requireAuth, (req, res) => {
+  const eventName = typeof req.body.event_name === "string" ? req.body.event_name.trim() : "";
+  if (!CLIENT_EVENT_NAMES.has(eventName)) {
+    return fail(res, 400, "VALIDATION_ERROR", "不支持的事件名。");
+  }
+  const payload = req.body.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+  recordEvent(req.user.id, eventName, { ...payload, _client: true });
+  res.json(ok({}));
+});
 
 router.post("/auth/logout", (req, res) => {
   res.clearCookie("token", { path: "/" });
@@ -342,6 +361,24 @@ router.get("/profile/stats", requireAuth, (req, res) => {
   const collectionCount = db.prepare("SELECT COUNT(*) AS count FROM question_collections WHERE user_id = ?").get(req.user.id).count;
   const abilities = practiceWeakTags(req.user.id);
   const totalAttempts = Number(summary.total_attempts || 0);
+
+  // 重做机制 M4：订正率（错题中进入订正流程的比例）+ 重做通过率
+  const correctionSummary = db.prepare(`
+    SELECT COUNT(*) AS wrong_total,
+      SUM(CASE WHEN correction_status != 'wrong' THEN 1 ELSE 0 END) AS corrected_count,
+      SUM(CASE WHEN correction_status = 'redo_passed' THEN 1 ELSE 0 END) AS redo_passed_count
+    FROM practice_corrections
+    WHERE user_id = ?
+  `).get(req.user.id);
+  const redoSummary = db.prepare(`
+    SELECT COUNT(*) AS redo_total, COALESCE(SUM(is_correct), 0) AS redo_correct
+    FROM practice_attempts
+    WHERE user_id = ? AND is_redo = 1
+  `).get(req.user.id);
+  const wrongTotal = Number(correctionSummary.wrong_total || 0);
+  const correctedCount = Number(correctionSummary.corrected_count || 0);
+  const redoTotal = Number(redoSummary.redo_total || 0);
+
   res.json(ok({
     summary: {
       total_attempts: totalAttempts,
@@ -349,6 +386,14 @@ router.get("/profile/stats", requireAuth, (req, res) => {
       correct_count: Number(summary.correct_count || 0),
       correct_rate: totalAttempts ? Math.round(Number(summary.correct_count) / totalAttempts * 100) : 0,
       collection_count: Number(collectionCount)
+    },
+    corrections: {
+      wrong_total: wrongTotal,
+      corrected_count: correctedCount,
+      correction_rate: wrongTotal ? Math.round(correctedCount / wrongTotal * 100) : 0,
+      redo_total: redoTotal,
+      redo_passed_count: Number(correctionSummary.redo_passed_count || 0),
+      redo_pass_rate: redoTotal ? Math.round(Number(redoSummary.redo_correct) / redoTotal * 100) : 0
     },
     abilities,
     recent_attempts: recentRows.map((row) => ({
@@ -847,12 +892,57 @@ router.get("/practice/questions/current", requireAuth, (req, res) => {
   }));
 });
 
+function correctionRow(userId, questionId) {
+  return db.prepare("SELECT * FROM practice_corrections WHERE user_id = ? AND practice_question_id = ?")
+    .get(userId, questionId);
+}
+
+function upsertCorrection(userId, questionId, fields) {
+  const existing = correctionRow(userId, questionId);
+  const now = nowIso();
+  if (existing) {
+    db.prepare(`
+      UPDATE practice_corrections
+      SET correction_status = ?, note = COALESCE(?, note), redo_count = ?, redo_available_at = ?, updated_at = ?
+      WHERE user_id = ? AND practice_question_id = ?
+    `).run(
+      fields.status,
+      fields.note ?? null,
+      fields.redoCount ?? existing.redo_count,
+      fields.redoAvailableAt !== undefined ? fields.redoAvailableAt : existing.redo_available_at,
+      now, userId, questionId
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO practice_corrections (
+        user_id, practice_question_id, correction_status, note, redo_count, redo_available_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, questionId, fields.status, fields.note ?? null, fields.redoCount ?? 0, fields.redoAvailableAt ?? null, now, now);
+  }
+  return correctionRow(userId, questionId);
+}
+
 router.get("/practice/questions/:questionId", requireAuth, (req, res) => {
   const row = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
     .get(req.params.questionId, req.user.id);
   if (!row) {
     return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
   }
+  const correction = correctionRow(req.user.id, row.id);
+
+  // 重做遮蔽模式：不下发参考答案与历史作答/反馈（设计红线：由后端保证，前端无法绕过）
+  if (req.query.mode === "redo") {
+    if (!correction || correction.correction_status !== "redo_pending") {
+      return fail(res, 400, "VALIDATION_ERROR", "这道题还没有进入重做流程，请先标记「我已订正」。");
+    }
+    return res.json(ok({
+      question: toPracticeQuestion(row, { includeAnswer: false }),
+      latest_attempt: null,
+      correction: toPracticeCorrection(correction),
+      redo_mode: true
+    }));
+  }
+
   const latestAttempt = db.prepare(`
     SELECT * FROM practice_attempts
     WHERE user_id = ? AND practice_question_id = ?
@@ -862,7 +952,54 @@ router.get("/practice/questions/:questionId", requireAuth, (req, res) => {
 
   res.json(ok({
     question: toPracticeQuestion(row, { includeAnswer: Boolean(latestAttempt) }),
-    latest_attempt: latestAttempt ? toPracticeAttempt(latestAttempt) : null
+    latest_attempt: latestAttempt ? toPracticeAttempt(latestAttempt) : null,
+    correction: toPracticeCorrection(correction)
+  }));
+});
+
+// ——— 重做机制：标记已订正（wrong/corrected → redo_pending）———
+router.post("/practice/questions/:questionId/corrections", requireAuth, (req, res) => {
+  const row = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
+    .get(req.params.questionId, req.user.id);
+  if (!row) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
+
+  const latestAttempt = db.prepare(`
+    SELECT * FROM practice_attempts
+    WHERE user_id = ? AND practice_question_id = ?
+    ORDER BY created_at DESC LIMIT 1
+  `).get(req.user.id, row.id);
+  if (!latestAttempt) {
+    return fail(res, 400, "VALIDATION_ERROR", "还没有作答记录，先做一遍这道题。");
+  }
+  if (latestAttempt.is_correct) {
+    return fail(res, 400, "VALIDATION_ERROR", "最近一次作答已经通过，不需要订正。");
+  }
+
+  const note = typeof req.body.note === "string" ? req.body.note.trim().slice(0, 500) : null;
+  // 间隔效应：建议订正 30 分钟后再重做；「立即重做」仍然允许，前端负责引导
+  const redoAvailableAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const correction = upsertCorrection(req.user.id, row.id, {
+    status: "redo_pending",
+    note,
+    redoAvailableAt
+  });
+  recordEvent(req.user.id, "correction_marked", { practice_question_id: row.id, has_note: Boolean(note) });
+  res.json(ok(toPracticeCorrection(correction)));
+});
+
+// ——— 重做机制：订正历史（按作答轮次排列，理解成长轨迹）———
+router.get("/practice/questions/:questionId/attempts", requireAuth, (req, res) => {
+  const row = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
+    .get(req.params.questionId, req.user.id);
+  if (!row) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
+  const rows = db.prepare(`
+    SELECT * FROM practice_attempts
+    WHERE user_id = ? AND practice_question_id = ?
+    ORDER BY attempt_round ASC, created_at ASC
+  `).all(req.user.id, row.id);
+  res.json(ok({
+    items: rows.map(toPracticeAttempt),
+    correction: toPracticeCorrection(correctionRow(req.user.id, row.id))
   }));
 });
 
@@ -885,13 +1022,53 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
     throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
   }
 
+  // 重做提交：redo_of_attempt_id 指向被重做的那次作答，评阅切换为对比模式
+  const redoOfAttemptId = typeof req.body.redo_of_attempt_id === "string" ? req.body.redo_of_attempt_id : null;
+  let parentAttempt = null;
+  if (redoOfAttemptId) {
+    const parentRow = db.prepare("SELECT * FROM practice_attempts WHERE id = ? AND user_id = ? AND practice_question_id = ?")
+      .get(redoOfAttemptId, req.user.id, questionRow.id);
+    if (!parentRow) {
+      throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到被重做的那次作答记录。");
+    }
+    const correction = correctionRow(req.user.id, questionRow.id);
+    if (!correction || correction.correction_status !== "redo_pending") {
+      throw new AppError(400, "VALIDATION_ERROR", "这道题还没有进入重做流程，请先标记「我已订正」。");
+    }
+    const latestAttempt = db.prepare(`
+      SELECT id FROM practice_attempts
+      WHERE user_id = ? AND practice_question_id = ?
+      ORDER BY attempt_round DESC, created_at DESC
+      LIMIT 1
+    `).get(req.user.id, questionRow.id);
+    if (latestAttempt?.id !== parentRow.id) {
+      throw new AppError(400, "VALIDATION_ERROR", "请基于最近一次作答完成重做。");
+    }
+    parentAttempt = toPracticeAttempt(parentRow);
+  }
+
   const evaluationQuestion = toPracticeQuestion(questionRow, { includeAnswer: true });
   const evaluationStartedAt = Date.now();
-  const { evaluation, fromCache } = await evaluatePracticeWithCache({
-    userId: req.user.id,
-    practiceQuestion: evaluationQuestion,
-    answerText
-  });
+  let evaluation;
+  let fromCache = false;
+  if (parentAttempt) {
+    // 对比评阅带上一次作答上下文，不走普通评阅缓存
+    ensureAiConfigured();
+    evaluation = await withAiQuota(req.user.id, () => evaluatePracticeRedo({
+      practiceQuestion: evaluationQuestion,
+      answerText,
+      previousAttempt: parentAttempt,
+      canonicalTags: canonicalTagsForSubject(evaluationQuestion.subject)
+    }));
+  } else {
+    const result = await evaluatePracticeWithCache({
+      userId: req.user.id,
+      practiceQuestion: evaluationQuestion,
+      answerText
+    });
+    evaluation = result.evaluation;
+    fromCache = result.fromCache;
+  }
 
   const attemptId = randomUUID();
   const stepBreakdown = Array.isArray(evaluation.step_breakdown) ? evaluation.step_breakdown : [];
@@ -902,8 +1079,9 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
   db.prepare(`
     INSERT INTO practice_attempts (
       id, user_id, practice_question_id, answer_text, is_correct, score,
-      feedback_text, step_breakdown_json, next_action, created_at, from_cache
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      feedback_text, step_breakdown_json, next_action, created_at, from_cache,
+      attempt_round, parent_attempt_id, is_redo, progress_note
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     attemptId,
     req.user.id,
@@ -915,8 +1093,54 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
     JSON.stringify(stepBreakdown),
     evaluation.next_action || "复盘本道题的关键步骤后，再独立重做一遍。",
     createdAt,
-    fromCache ? 1 : 0
+    fromCache ? 1 : 0,
+    parentAttempt ? parentAttempt.attempt_round + 1 : 1,
+    parentAttempt ? parentAttempt.id : null,
+    parentAttempt ? 1 : 0,
+    parentAttempt ? (evaluation.progress_note || null) : null
   );
+
+  recordEvent(req.user.id, parentAttempt ? "redo_submitted" : "attempt_submitted", {
+    practice_question_id: evaluationQuestion.id,
+    score,
+    is_correct: isCorrect,
+    from_cache: fromCache
+  });
+
+  // 订正状态机推进
+  let correction = correctionRow(req.user.id, evaluationQuestion.id);
+  if (parentAttempt) {
+    if (isCorrect) {
+      // 重做通过：redo_passed。重做通过 ≠ 掌握——间隔复习链继续走向 mastered
+      correction = upsertCorrection(req.user.id, evaluationQuestion.id, { status: "redo_passed" });
+      recordEvent(req.user.id, "redo_passed", { practice_question_id: evaluationQuestion.id, score });
+      // M3：重做通过 → 触发/延续间隔复习链（当天/3/7/14 天），全部通过才算 mastered
+      try {
+        createReviewTasks({
+          userId: req.user.id,
+          subject: evaluationQuestion.subject,
+          knowledgeTags: evaluationQuestion.knowledge_tags,
+          difficulty: evaluationQuestion.difficulty || "medium",
+          sourceQuestionId: evaluationQuestion.id,
+          sourceQuestionType: "practice"
+        });
+      } catch {
+        // 复习任务创建失败不影响主流程
+      }
+    } else {
+      // 重做仍错：回 corrected，redo_count+1；第 3 次失败由前端引导进入解析入口
+      correction = upsertCorrection(req.user.id, evaluationQuestion.id, {
+        status: "corrected",
+        redoCount: (correction?.redo_count ?? 0) + 1
+      });
+    }
+  } else if (!isCorrect) {
+    // 首答（或再练）未通过：进入订正状态机起点
+    correction = upsertCorrection(req.user.id, evaluationQuestion.id, {
+      status: "wrong",
+      redoCount: correction?.redo_count ?? 0
+    });
+  }
 
   if (!isCorrect) {
     const tags = normalizeKnowledgeTags(
@@ -954,7 +1178,14 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
   }
 
   const attempt = toPracticeAttempt(db.prepare("SELECT * FROM practice_attempts WHERE id = ?").get(attemptId));
-  res.json(ok({ question: evaluationQuestion, attempt, cached: fromCache, elapsed_ms: Date.now() - evaluationStartedAt }));
+  res.json(ok({
+    question: evaluationQuestion,
+    attempt,
+    cached: fromCache,
+    elapsed_ms: Date.now() - evaluationStartedAt,
+    correction: toPracticeCorrection(correction),
+    previous_attempt: parentAttempt
+  }));
 }));
 
 router.post("/practice/questions/:questionId/follow-up", requireAuth, asyncRoute(async (req, res) => {
