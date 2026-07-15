@@ -10,6 +10,8 @@ import { router } from "./routes.js";
 import { importRouter } from "./routes-import.js";
 import { reviewRouter } from "./routes-review.js";
 import { recommendRouter } from "./routes-recommend.js";
+import { adminRouter } from "./routes-admin.js";
+import { discoveryRouter } from "./routes-discovery.js";
 import { setupV2 } from "./migrate-v2.js";
 import { AppError, fail } from "./http.js";
 import { requireAuth } from "./auth.js";
@@ -97,6 +99,8 @@ app.use("/api/v1", router);
 app.use("/api/v1", importRouter);
 app.use("/api/v1", reviewRouter);
 app.use("/api/v1", recommendRouter);
+app.use("/api/v1", adminRouter);
+app.use("/api/v1", discoveryRouter);
 
 // 兜底：未匹配的路由返回 JSON 错误而非默认 HTML
 app.use("/api/v1", (_req, res) => {

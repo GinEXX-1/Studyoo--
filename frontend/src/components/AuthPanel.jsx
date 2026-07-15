@@ -3,6 +3,8 @@ import { apiRequest } from "../lib/api.js";
 import { toast } from "sonner";
 
 const grades = ["高一", "高二", "高三"];
+const electiveOptions = ["化学", "生物", "政治", "地理"];
+const scoreBands = ["600以上", "500-599", "400-499", "400以下", "暂不清楚"];
 
 export default function AuthPanel({ onSignedIn }) {
   const [mode, setMode] = useState("login");
@@ -11,15 +13,35 @@ export default function AuthPanel({ onSignedIn }) {
   const [grade, setGrade] = useState("高一");
   const [inviteCode, setInviteCode] = useState("");
   const [contact, setContact] = useState("");
+  const [examTrack, setExamTrack] = useState("物理");
+  const [electives, setElectives] = useState(["化学", "生物"]);
+  const [targetScore, setTargetScore] = useState(600);
+  const [currentScoreBand, setCurrentScoreBand] = useState("500-599");
+  const [learningContext, setLearningContext] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
+    if (mode === "register" && electives.length !== 2) {
+      toast.error("请从化学、生物、政治、地理中选择两科");
+      return;
+    }
     setLoading(true);
     try {
       const data = await apiRequest(mode === "login" ? "/auth/login" : "/auth/register", {
         method: "POST",
-        body: JSON.stringify({ nickname, password, grade, invite_code: inviteCode, contact })
+        body: JSON.stringify({
+          nickname,
+          password,
+          grade,
+          invite_code: inviteCode,
+          contact,
+          exam_track: examTrack,
+          electives,
+          target_score: Number(targetScore),
+          current_score_band: currentScoreBand,
+          learning_context: learningContext
+        })
       });
       toast.success(mode === "login" ? "登录成功" : "注册成功");
       onSignedIn(data.user);
@@ -28,6 +50,14 @@ export default function AuthPanel({ onSignedIn }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function toggleElective(subject) {
+    setElectives((items) => {
+      if (items.includes(subject)) return items.filter((item) => item !== subject);
+      if (items.length >= 2) return [items[1], subject];
+      return [...items, subject];
+    });
   }
 
   return (
@@ -44,7 +74,7 @@ export default function AuthPanel({ onSignedIn }) {
           <div className="auth-scene-card auth-scene-path"><small>个性化路径</small><strong>下一站 · 导数应用</strong></div>
         </div>
       </section>
-      <section className="auth-card">
+      <section className={`auth-card ${mode === "register" ? "auth-register-card" : ""}`}>
         <p className="eyebrow">{mode === "login" ? "欢迎回来" : "开始使用"}</p>
         <h1>{mode === "login" ? "继续今天的学习。" : "建立你的学习路径。"}</h1>
         <p className="auth-card-lede">不追求更多答案，只追求真正想明白。</p>
@@ -58,6 +88,10 @@ export default function AuthPanel({ onSignedIn }) {
           {mode === "register" && (
             <>
               <label>年级<select value={grade} onChange={(event) => setGrade(event.target.value)}>{grades.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <fieldset className="onboarding-fieldset"><legend>首选科目</legend><div className="subject-toggles compact">{["物理", "历史"].map((subject) => <button type="button" key={subject} className={examTrack === subject ? "active" : ""} onClick={() => setExamTrack(subject)}>{subject}</button>)}</div></fieldset>
+              <fieldset className="onboarding-fieldset"><legend>再选两科 <span>{electives.length}/2</span></legend><div className="subject-toggles compact">{electiveOptions.map((subject) => <button type="button" key={subject} className={electives.includes(subject) ? "active" : ""} onClick={() => toggleElective(subject)}>{subject}</button>)}</div></fieldset>
+              <div className="onboarding-score-grid"><label>目前分数段<select value={currentScoreBand} onChange={(event) => setCurrentScoreBand(event.target.value)}>{scoreBands.map((item) => <option key={item}>{item}</option>)}</select></label><label>目标总分<input type="number" min="0" max="750" value={targetScore} onChange={(event) => setTargetScore(event.target.value)} /></label></div>
+              <label>目前最困扰你的学习问题（选填）<textarea rows="3" value={learningContext} onChange={(event) => setLearningContext(event.target.value)} placeholder="例：数学选择题耗时长，物理大题经常不知道从哪里开始" /></label>
               <label>邀请码<input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="内测邀请码（未开启可留空）" /></label>
               <label>联系方式（选填）<input value={contact} onChange={(event) => setContact(event.target.value)} placeholder="微信 / QQ / 手机号，忘记密码时用于找回" /></label>
             </>

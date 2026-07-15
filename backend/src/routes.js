@@ -274,8 +274,30 @@ router.post("/auth/register", authRateLimiter(), asyncRoute(async (req, res) => 
   if (password.length < 6 || password.length > 128) {
     throw new AppError(400, "VALIDATION_ERROR", "密码长度应介于 6 到 128 位之间。");
   }
+  const reservedAdminNickname = config.adminNicknames.includes(nickname);
+  const bootstrapToken = typeof req.body.admin_bootstrap_token === "string" ? req.body.admin_bootstrap_token.trim() : "";
+  if (reservedAdminNickname && (!config.adminBootstrapToken || bootstrapToken !== config.adminBootstrapToken)) {
+    throw new AppError(403, "ADMIN_BOOTSTRAP_REQUIRED", "该昵称已保留给管理员账号。请由服务端完成初始化。");
+  }
   // 可选联系方式：忘记密码时管理员据此人工核验身份后重置（内测期唯一找回途径）
   const contact = typeof req.body.contact === "string" ? req.body.contact.trim().slice(0, 100) : "";
+  const examTrack = ["物理", "历史"].includes(req.body.exam_track) ? req.body.exam_track : null;
+  const electives = Array.isArray(req.body.electives)
+    ? [...new Set(req.body.electives.filter((item) => ["化学", "生物", "政治", "地理"].includes(item)))].slice(0, 2)
+    : [];
+  const targetScoreValue = Number(req.body.target_score);
+  const targetScore = Number.isInteger(targetScoreValue) && targetScoreValue >= 0 && targetScoreValue <= 750
+    ? targetScoreValue
+    : null;
+  const scoreBands = new Set(["600以上", "500-599", "400-499", "400以下", "暂不清楚"]);
+  const currentScoreBand = scoreBands.has(req.body.current_score_band) ? req.body.current_score_band : null;
+  const learningContext = typeof req.body.learning_context === "string"
+    ? req.body.learning_context.trim().slice(0, 500)
+    : "";
+  const onboardingCompleted = Boolean(examTrack && electives.length === 2 && targetScore !== null && currentScoreBand);
+  const selectedSubjects = onboardingCompleted
+    ? ["语文", "数学", "英语", examTrack, ...electives]
+    : [];
 
   const exists = db.prepare("SELECT id FROM users WHERE nickname = ?").get(nickname);
   if (exists) {
@@ -286,12 +308,24 @@ router.post("/auth/register", authRateLimiter(), asyncRoute(async (req, res) => 
   const createdAt = nowIso();
   const passwordHash = await bcrypt.hash(password, 10);
   db.prepare(`
-    INSERT INTO users (id, nickname, password_hash, grade, subjects_json, created_at, contact)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(userId, nickname, passwordHash, grade, JSON.stringify([]), createdAt, contact || null);
+    INSERT INTO users (
+      id, nickname, password_hash, grade, subjects_json, created_at, contact,
+      exam_track, electives_json, target_score, current_score_band, learning_context, onboarding_completed, is_admin
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    userId, nickname, passwordHash, grade, JSON.stringify(selectedSubjects), createdAt, contact || null,
+    examTrack, JSON.stringify(electives), targetScore, currentScoreBand, learningContext || null, onboardingCompleted ? 1 : 0,
+    reservedAdminNickname ? 1 : 0
+  );
 
   const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId));
-  recordEvent(userId, "register", { grade, has_contact: Boolean(contact) });
+  recordEvent(userId, "register", {
+    grade,
+    has_contact: Boolean(contact),
+    onboarding_completed: onboardingCompleted,
+    exam_track: examTrack,
+    target_score: targetScore
+  });
   const token = signToken(user);
   res.cookie("token", token, { httpOnly: true, sameSite: "strict", secure: config.secureCookie, maxAge: 604800000, path: "/" });
   res.status(201).json(ok({ user, token }));
@@ -337,7 +371,28 @@ router.get("/users/me", requireAuth, (req, res) => {
 router.patch("/users/me", requireAuth, asyncRoute(async (req, res) => {
   const grade = typeof req.body.grade === "string" ? req.body.grade : req.user.grade;
   const subjects = Array.isArray(req.body.subjects) ? req.body.subjects.filter((item) => typeof item === "string") : req.user.subjects;
-  db.prepare("UPDATE users SET grade = ?, subjects_json = ? WHERE id = ?").run(grade, JSON.stringify(subjects), req.user.id);
+  const examTrack = ["物理", "历史"].includes(req.body.exam_track) ? req.body.exam_track : req.user.exam_track;
+  const electives = Array.isArray(req.body.electives)
+    ? [...new Set(req.body.electives.filter((item) => ["化学", "生物", "政治", "地理"].includes(item)))].slice(0, 2)
+    : req.user.electives;
+  const targetScoreValue = Number(req.body.target_score);
+  const targetScore = Number.isInteger(targetScoreValue) && targetScoreValue >= 0 && targetScoreValue <= 750
+    ? targetScoreValue
+    : req.user.target_score;
+  const scoreBands = new Set(["600以上", "500-599", "400-499", "400以下", "暂不清楚"]);
+  const currentScoreBand = scoreBands.has(req.body.current_score_band) ? req.body.current_score_band : req.user.current_score_band;
+  const learningContext = typeof req.body.learning_context === "string"
+    ? req.body.learning_context.trim().slice(0, 500)
+    : req.user.learning_context;
+  const onboardingCompleted = Boolean(examTrack && electives.length === 2 && targetScore !== null && currentScoreBand);
+  db.prepare(`
+    UPDATE users SET grade = ?, subjects_json = ?, exam_track = ?, electives_json = ?,
+      target_score = ?, current_score_band = ?, learning_context = ?, onboarding_completed = ?
+    WHERE id = ?
+  `).run(
+    grade, JSON.stringify(subjects), examTrack, JSON.stringify(electives), targetScore,
+    currentScoreBand, learningContext || null, onboardingCompleted ? 1 : 0, req.user.id
+  );
   const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id));
   res.json(ok(user));
 }));

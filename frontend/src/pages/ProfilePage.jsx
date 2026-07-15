@@ -3,10 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import Stat from "../components/Stat.jsx";
 import LearningPathGraph from "../components/LearningPathGraph.jsx";
+import AccountFeedback from "../components/AccountFeedback.jsx";
 import { apiRequest } from "../lib/api.js";
 
 const grades = ["高一", "高二", "高三"];
-const subjects = ["数学", "物理", "化学", "历史", "地理", "政治", "语文", "英语"];
+const subjects = ["数学", "物理", "化学", "生物", "历史", "地理", "政治", "语文", "英语"];
+const electiveOptions = ["化学", "生物", "政治", "地理"];
+const scoreBands = ["600以上", "500-599", "400-499", "400以下", "暂不清楚"];
 
 function formatDate(value) {
   if (!value) return "";
@@ -45,9 +48,15 @@ export default function ProfilePage({ user, onUserUpdated, onLogout }) {
   const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [learningPath, setLearningPath] = useState({ today: [], upcoming: [], completed: [] });
+  const [graph, setGraph] = useState(null);
   const [pathLoading, setPathLoading] = useState(false);
   const [grade, setGrade] = useState(user.grade);
   const [selectedSubjects, setSelectedSubjects] = useState(user.subjects || []);
+  const [examTrack, setExamTrack] = useState(user.exam_track || "物理");
+  const [electives, setElectives] = useState(user.electives?.length ? user.electives : ["化学", "生物"]);
+  const [targetScore, setTargetScore] = useState(user.target_score ?? 600);
+  const [currentScoreBand, setCurrentScoreBand] = useState(user.current_score_band || "500-599");
+  const [learningContext, setLearningContext] = useState(user.learning_context || "");
   const [saved, setSaved] = useState(false);
 
   async function loadPath() {
@@ -78,9 +87,19 @@ export default function ProfilePage({ user, onUserUpdated, onLogout }) {
     }
   }
 
+  async function loadGraph(subject) {
+    try {
+      const query = subject ? `?subject=${encodeURIComponent(subject)}` : "";
+      setGraph(await apiRequest(`/recommend/graph${query}`));
+    } catch (error) {
+      toast.error(error.message);
+    }
+  }
+
   useEffect(() => {
     apiRequest("/profile/stats").then(setStats).catch((error) => toast.error(error.message));
     loadPath();
+    loadGraph();
   }, []);
 
   async function dismissTask(taskId) {
@@ -95,7 +114,7 @@ export default function ProfilePage({ user, onUserUpdated, onLogout }) {
 
   async function saveProfile() {
     try {
-      const nextUser = await apiRequest("/users/me", { method: "PATCH", body: JSON.stringify({ grade, subjects: selectedSubjects }) });
+      const nextUser = await apiRequest("/users/me", { method: "PATCH", body: JSON.stringify({ grade, subjects: selectedSubjects, exam_track: examTrack, electives, target_score: Number(targetScore), current_score_band: currentScoreBand, learning_context: learningContext }) });
       onUserUpdated(nextUser);
       setSaved(true);
       toast.success("设置已保存");
@@ -109,12 +128,20 @@ export default function ProfilePage({ user, onUserUpdated, onLogout }) {
     setSelectedSubjects((items) => items.includes(subject) ? items.filter((item) => item !== subject) : [...items, subject]);
   }
 
+  function toggleElective(subject) {
+    setElectives((items) => {
+      if (items.includes(subject)) return items.filter((item) => item !== subject);
+      if (items.length >= 2) return [items[1], subject];
+      return [...items, subject];
+    });
+  }
+
   return (
     <div className="page-stack">
       <section className="profile-hero"><div className="avatar">{user.nickname.slice(0, 1).toUpperCase()}</div><div><p className="eyebrow">Personal</p><h1>{user.nickname}</h1><p>{user.grade} · 已加入 Studyoo</p></div></section>
       <section className="profile-stats"><Stat value={stats?.summary.total_attempts || 0} label="累计作答" /><Stat value={`${stats?.summary.correct_rate || 0}%`} label="正确率" /><Stat value={stats?.summary.average_score || 0} label="平均分" /><Stat value={stats?.summary.collection_count || 0} label="个人题库" /><Stat value={`${stats?.corrections?.correction_rate || 0}%`} label="订正率" /><Stat value={`${stats?.corrections?.redo_pass_rate || 0}%`} label="重做通过率" /></section>
       <section className="profile-grid profile-overview-grid">
-        <div className="learning-graph-panel"><div className="section-heading"><div><p className="eyebrow">Learning Map</p><h2>个性化学习路径</h2></div><span className="section-note">点击节点查看</span></div><LearningPathGraph abilities={stats?.abilities || []} onStart={() => navigate(learningPath.today[0] ? `/review/${learningPath.today[0].id}` : "/library")} /></div>
+        <div className="learning-graph-panel"><div className="section-heading"><div><p className="eyebrow">Learning Map</p><h2>个性化学习路径</h2></div>{graph?.available_subjects?.length > 1 ? <select className="graph-subject-select" value={graph.subject} onChange={(event) => loadGraph(event.target.value)}>{graph.available_subjects.map((item) => <option key={item}>{item}</option>)}</select> : <span className="section-note">点击节点查看</span>}</div>{graph?.goal && <div className="graph-goal"><span>当前 {graph.goal.current_score_band || "待评估"}</span><strong>目标 {graph.goal.target_score ?? "待设置"} 分</strong>{graph.goal.estimated_gap !== null && <b>差距 {graph.goal.estimated_gap} 分</b>}{graph.goal.context_matches?.length > 0 && <em>学情重点：{graph.goal.context_matches.join(" · ")}</em>}</div>}<LearningPathGraph graph={graph} onStart={(node) => navigate(node.recommended_collection_id ? `/practice/${node.recommended_collection_id}` : learningPath.today[0] ? `/review/${learningPath.today[0].id}` : "/library")} /></div>
         <div className="ability-panel"><div className="section-heading"><div><p className="eyebrow">Ability Map</p><h2>能力地图</h2></div><span className="section-note">订正与重做通过后，颜色会变化</span></div>{stats?.abilities.length ? stats.abilities.map((item) => {
           const mastery = item.average_score >= 80 ? "mastered" : item.average_score >= 60 ? "progressing" : "weak";
           const masteryLabel = mastery === "mastered" ? "已掌握" : mastery === "progressing" ? "巩固中" : "薄弱";
@@ -132,7 +159,8 @@ export default function ProfilePage({ user, onUserUpdated, onLogout }) {
         {!pathLoading && !learningPath.today.length && !learningPath.upcoming.length && !learningPath.completed.length && <p className="empty-copy">目前没有复习任务。答错一道练习题后，系统会安排当天、3 天、7 天和 14 天复测。</p>}
       </section>
 
-      <section className="settings-panel"><div><p className="eyebrow">Settings</p><h2>学习设置</h2></div><label>年级<select value={grade} onChange={(event) => setGrade(event.target.value)}>{grades.map((item) => <option key={item}>{item}</option>)}</select></label><div className="subject-toggles">{subjects.map((subject) => <button key={subject} className={selectedSubjects.includes(subject) ? "active" : ""} onClick={() => toggleSubject(subject)}>{subject}</button>)}</div><div className="form-actions"><button className="primary" onClick={saveProfile}>保存设置</button>{saved && <span className="success">已保存</span>}</div><button className="logout-button" onClick={onLogout}>退出登录</button></section>
+      <section className="settings-panel"><div><p className="eyebrow">Settings</p><h2>学习设置</h2></div><div className="settings-grid"><label>年级<select value={grade} onChange={(event) => setGrade(event.target.value)}>{grades.map((item) => <option key={item}>{item}</option>)}</select></label><label>目前分数段<select value={currentScoreBand} onChange={(event) => setCurrentScoreBand(event.target.value)}>{scoreBands.map((item) => <option key={item}>{item}</option>)}</select></label><label>目标总分<input type="number" min="0" max="750" value={targetScore} onChange={(event) => setTargetScore(event.target.value)} /></label></div><fieldset className="onboarding-fieldset"><legend>3+1+2 首选科目</legend><div className="subject-toggles compact">{["物理", "历史"].map((subject) => <button type="button" key={subject} className={examTrack === subject ? "active" : ""} onClick={() => setExamTrack(subject)}>{subject}</button>)}</div></fieldset><fieldset className="onboarding-fieldset"><legend>再选两科 <span>{electives.length}/2</span></legend><div className="subject-toggles compact">{electiveOptions.map((subject) => <button type="button" key={subject} className={electives.includes(subject) ? "active" : ""} onClick={() => toggleElective(subject)}>{subject}</button>)}</div></fieldset><label>学情说明<textarea rows="3" value={learningContext} onChange={(event) => setLearningContext(event.target.value)} placeholder="记录目前最困扰你的问题" /></label><div><span className="settings-label">内容偏好</span><div className="subject-toggles">{subjects.map((subject) => <button type="button" key={subject} className={selectedSubjects.includes(subject) ? "active" : ""} onClick={() => toggleSubject(subject)}>{subject}</button>)}</div></div><div className="form-actions"><button className="primary" disabled={electives.length !== 2} onClick={saveProfile}>保存设置</button>{saved && <span className="success">已保存</span>}</div><button className="logout-button" onClick={onLogout}>退出登录</button></section>
+      <AccountFeedback />
     </div>
   );
 }
