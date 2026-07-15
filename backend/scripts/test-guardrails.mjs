@@ -19,7 +19,10 @@ const child = spawn("node", ["--no-warnings", "src/server.js"], {
     UPLOAD_DIR: uploadDir,
     JWT_SECRET: "guardrails-test-secret",
     INVITE_CODE: "STUDYOO-BETA",
-    AI_GLOBAL_DAILY_LIMIT: "0"
+    AI_GLOBAL_DAILY_LIMIT: "0",
+    // 占位 key：让 ensureAiConfigured 通过，从而测到"配额 429 先于 AI 调用"。
+    // 全站限额为 0，请求在发往 AI 服务之前就会被拦下，不产生真实调用（CI 无 .env 时必需）。
+    AI_API_KEY: "guardrails-dummy-key"
   },
   stdio: "ignore"
 });

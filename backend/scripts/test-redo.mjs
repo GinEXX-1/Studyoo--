@@ -117,6 +117,13 @@ try {
   const premature = await request(`/practice/questions/${practiceId}?mode=redo`, { token });
   assert(premature.status === 400, "未标记订正时重做模式返回 400");
 
+  const prematureSubmit = await request(`/practice/questions/${practiceId}/attempt`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ answer_text: "尝试绕过订正流程", redo_of_attempt_id: firstAttemptId })
+  });
+  assert(prematureSubmit.status === 400, "未标记订正时重做提交也被后端拒绝");
+
   // 3) 标记已订正 → redo_pending
   const correction = await request(`/practice/questions/${practiceId}/corrections`, {
     method: "POST",

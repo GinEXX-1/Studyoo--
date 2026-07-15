@@ -1031,6 +1031,19 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
     if (!parentRow) {
       throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到被重做的那次作答记录。");
     }
+    const correction = correctionRow(req.user.id, questionRow.id);
+    if (!correction || correction.correction_status !== "redo_pending") {
+      throw new AppError(400, "VALIDATION_ERROR", "这道题还没有进入重做流程，请先标记「我已订正」。");
+    }
+    const latestAttempt = db.prepare(`
+      SELECT id FROM practice_attempts
+      WHERE user_id = ? AND practice_question_id = ?
+      ORDER BY attempt_round DESC, created_at DESC
+      LIMIT 1
+    `).get(req.user.id, questionRow.id);
+    if (latestAttempt?.id !== parentRow.id) {
+      throw new AppError(400, "VALIDATION_ERROR", "请基于最近一次作答完成重做。");
+    }
     parentAttempt = toPracticeAttempt(parentRow);
   }
 
