@@ -1,11 +1,62 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { requireAdmin, requireAuth } from "./auth.js";
-import { config } from "./config.js";
 import { db, normalizeKnowledgeTags, nowIso, parseJson, recordEvent } from "./db.js";
-import { AppError, asyncRoute, fail, ok } from "./http.js";
+import { AppError, fail, ok } from "./http.js";
+import { ensureAiConfigured } from "./ai.js";
+import { runCrawlJob, validateCrawlUrl } from "./web-crawler.js";
 
 export const discoveryRouter = express.Router();
+const supportedSubjects = new Set(["语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治"]);
+
+function toCrawlJob(row) {
+  const counts = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved,
+      SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+    FROM discovery_candidates WHERE job_id = ?
+  `).get(row.id);
+  return {
+    id: row.id,
+    seed_url: row.seed_url,
+    subject: row.subject,
+    max_pages: row.max_pages,
+    status: row.status,
+    pages_crawled: row.pages_crawled,
+    candidates_found: row.candidates_found,
+    error_message: row.error_message || null,
+    candidate_counts: {
+      total: Number(counts.total || 0),
+      pending: Number(counts.pending || 0),
+      approved: Number(counts.approved || 0),
+      rejected: Number(counts.rejected || 0)
+    },
+    created_at: row.created_at,
+    completed_at: row.completed_at || null
+  };
+}
+
+function toCrawlCandidate(row) {
+  return {
+    id: row.id,
+    job_id: row.job_id,
+    source_url: row.source_url,
+    page_title: row.page_title,
+    question_number: row.question_number,
+    question_type: row.question_type,
+    content_text: row.content_text,
+    official_answer_text: row.official_answer_text || "",
+    knowledge_tags: parseJson(row.knowledge_tags_json, []),
+    difficulty: row.difficulty,
+    confidence: Number(row.confidence || 0),
+    status: row.status,
+    review_note: row.review_note || "",
+    published_question_id: row.published_question_id || null,
+    created_at: row.created_at
+  };
+}
 
 function discoveryQuestion(questionId, userId) {
   return db.prepare(`
@@ -127,109 +178,141 @@ discoveryRouter.post("/discover/:questionId/save", requireAuth, (req, res) => {
   res.json(ok({ collection_id: collection.id, question_id: question.id, saved: true }));
 });
 
-discoveryRouter.post("/admin/discovery/fetch-preview", requireAdmin, asyncRoute(async (req, res) => {
-  let url;
-  try {
-    url = new URL(req.body.url);
-  } catch {
-    throw new AppError(400, "VALIDATION_ERROR", "网页地址不合法。");
-  }
-  if (url.protocol !== "https:" || !config.discoveryAllowedHosts.includes(url.hostname.toLowerCase())) {
-    throw new AppError(403, "SOURCE_NOT_ALLOWED", "该域名未加入 DISCOVERY_ALLOWED_HOSTS 白名单。");
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  let response;
-  try {
-    response = await fetch(url, {
-      redirect: "error",
-      signal: controller.signal,
-      headers: { "User-Agent": "StudyooContentCollector/1.0 (+https://studyoo.space)" }
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-  if (!response.ok) throw new AppError(502, "SOURCE_FETCH_FAILED", `来源网页返回 HTTP ${response.status}。`);
-  const contentType = response.headers.get("content-type") || "";
-  if (!contentType.includes("text/html")) throw new AppError(400, "SOURCE_TYPE_UNSUPPORTED", "目前只支持 HTML 题目页面。");
-  const html = (await response.text()).slice(0, 2_000_000);
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() || url.hostname;
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 30000);
-  res.json(ok({ url: url.toString(), title, text, fetched_at: nowIso() }));
-}));
-
-discoveryRouter.post("/admin/discovery/import", requireAdmin, (req, res) => {
+discoveryRouter.post("/admin/discovery/crawl", requireAdmin, (req, res) => {
+  const url = validateCrawlUrl(req.body.url);
   const subject = typeof req.body.subject === "string" ? req.body.subject.trim() : "";
-  const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
-  const sourceUrl = typeof req.body.source_url === "string" ? req.body.source_url.trim() : "";
-  const questions = Array.isArray(req.body.questions) ? req.body.questions.slice(0, 50) : [];
-  if (!subject || !title || !sourceUrl || !questions.length) {
-    return fail(res, 400, "VALIDATION_ERROR", "来源、标题、学科和题目不能为空。");
+  if (!supportedSubjects.has(subject)) {
+    return fail(res, 400, "VALIDATION_ERROR", "请选择有效学科。");
   }
-  let source;
-  try {
-    source = new URL(sourceUrl);
-  } catch {
-    return fail(res, 400, "VALIDATION_ERROR", "来源网页地址不合法。");
-  }
-  if (!["http:", "https:"].includes(source.protocol)) {
-    return fail(res, 400, "VALIDATION_ERROR", "来源网页必须使用 HTTP 或 HTTPS。");
-  }
-  const normalized = questions.map((item, index) => ({
-    id: randomUUID(),
-    number: String(item.question_number || index + 1),
-    type: typeof item.question_type === "string" ? item.question_type.trim() : "未标注",
-    content: typeof item.content_text === "string" ? item.content_text.trim() : "",
-    answer: typeof item.official_answer_text === "string" && item.official_answer_text.trim()
-      ? item.official_answer_text.trim()
-      : "原网页未附参考答案，请先独立推导。",
-    tags: normalizeKnowledgeTags(subject, item.knowledge_tags),
-    difficulty: ["easy", "medium", "hard"].includes(item.difficulty) ? item.difficulty : "medium"
-  }));
-  if (normalized.some((item) => !item.content)) return fail(res, 400, "VALIDATION_ERROR", "每道题都必须包含题目内容。");
-  const paperId = randomUUID();
+  ensureAiConfigured();
+  const maxPages = Math.max(1, Math.min(5, Number.parseInt(req.body.max_pages, 10) || 3));
+  const active = db.prepare(`
+    SELECT id FROM discovery_crawl_jobs
+    WHERE user_id = ? AND seed_url = ? AND status IN ('queued', 'running')
+  `).get(req.user.id, url.href);
+  if (active) return fail(res, 409, "CRAWL_ALREADY_RUNNING", "这个网址已有爬取任务正在进行。");
+
+  const id = randomUUID();
+  db.prepare(`
+    INSERT INTO discovery_crawl_jobs (id, user_id, seed_url, subject, max_pages, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'queued', ?)
+  `).run(id, req.user.id, url.href, subject, maxPages, nowIso());
+  queueMicrotask(() => runCrawlJob(id));
+  res.status(202).json(ok({ job: toCrawlJob(db.prepare("SELECT * FROM discovery_crawl_jobs WHERE id = ?").get(id)) }));
+});
+
+discoveryRouter.get("/admin/discovery/crawl-jobs", requireAdmin, (_req, res) => {
+  const rows = db.prepare("SELECT * FROM discovery_crawl_jobs ORDER BY created_at DESC LIMIT 30").all();
+  res.json(ok({ items: rows.map(toCrawlJob) }));
+});
+
+discoveryRouter.get("/admin/discovery/crawl-jobs/:jobId", requireAdmin, (req, res) => {
+  const job = db.prepare("SELECT * FROM discovery_crawl_jobs WHERE id = ?").get(req.params.jobId);
+  if (!job) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这个爬取任务。");
+  const candidates = db.prepare("SELECT * FROM discovery_candidates WHERE job_id = ? ORDER BY created_at, question_number").all(job.id);
+  res.json(ok({ job: toCrawlJob(job), candidates: candidates.map(toCrawlCandidate) }));
+});
+
+discoveryRouter.patch("/admin/discovery/candidates/:candidateId", requireAdmin, (req, res) => {
+  const candidate = db.prepare("SELECT * FROM discovery_candidates WHERE id = ?").get(req.params.candidateId);
+  if (!candidate) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道候选题。");
+  if (candidate.status !== "pending") return fail(res, 409, "REVIEW_ALREADY_FINISHED", "已审核的候选题不能再编辑。");
+  const job = db.prepare("SELECT * FROM discovery_crawl_jobs WHERE id = ?").get(candidate.job_id);
+  const content = typeof req.body.content_text === "string" ? req.body.content_text.trim() : candidate.content_text;
+  if (!content) return fail(res, 400, "VALIDATION_ERROR", "题目内容不能为空。");
+  const answer = typeof req.body.official_answer_text === "string" ? req.body.official_answer_text.trim() : candidate.official_answer_text;
+  const difficulty = ["easy", "medium", "hard"].includes(req.body.difficulty) ? req.body.difficulty : candidate.difficulty;
+  const tags = Array.isArray(req.body.knowledge_tags)
+    ? normalizeKnowledgeTags(job.subject, req.body.knowledge_tags)
+    : parseJson(candidate.knowledge_tags_json, []);
+  db.prepare(`
+    UPDATE discovery_candidates SET
+      question_number = ?, question_type = ?, content_text = ?, official_answer_text = ?,
+      knowledge_tags_json = ?, difficulty = ?, review_note = ?
+    WHERE id = ?
+  `).run(
+    String(req.body.question_number || candidate.question_number).trim().slice(0, 30),
+    String(req.body.question_type || candidate.question_type).trim().slice(0, 30),
+    content, answer || null, JSON.stringify(tags), difficulty,
+    typeof req.body.review_note === "string" ? req.body.review_note.trim().slice(0, 500) : candidate.review_note,
+    candidate.id
+  );
+  res.json(ok(toCrawlCandidate(db.prepare("SELECT * FROM discovery_candidates WHERE id = ?").get(candidate.id))));
+});
+
+function publishCandidate(candidate, reviewerId) {
+  const job = db.prepare("SELECT * FROM discovery_crawl_jobs WHERE id = ?").get(candidate.job_id);
+  const duplicate = db.prepare(`
+    SELECT q.id FROM exam_questions q
+    JOIN exam_papers p ON p.id = q.paper_id
+    WHERE p.import_kind = 'web' AND q.content_text = ? LIMIT 1
+  `).get(candidate.content_text);
+  if (duplicate) throw new AppError(409, "DUPLICATE_QUESTION", "这道题已经发布过，请拒绝重复候选。");
+  let paperId = job.published_paper_id;
   const createdAt = nowIso();
   db.exec("BEGIN");
   try {
-    db.prepare(`
-      INSERT INTO exam_papers (
-        id, year, region, subject, title, source_name, source_url, license_note,
-        status, created_at, owner_user_id, is_shared, import_kind
-      ) VALUES (?, ?, '网络', ?, ?, ?, ?, '仅收录公开可访问题目文本，保留原始来源链接。', 'published', ?, ?, 1, 'web')
-    `).run(paperId, new Date().getFullYear(), subject, title, source.hostname, sourceUrl, createdAt, req.user.id);
-    for (const item of normalized) {
+    if (!paperId) {
+      paperId = randomUUID();
+      const source = new URL(job.seed_url);
       db.prepare(`
-        INSERT INTO exam_questions (
-          id, paper_id, question_number, subject, question_type, content_text,
-          official_answer_text, source, knowledge_tags_json, difficulty, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_profile', ?)
-      `).run(item.id, paperId, item.number, subject, item.type, item.content, item.answer, title, JSON.stringify(item.tags), item.difficulty, createdAt);
-      db.prepare(`
-        INSERT INTO practice_questions (
-          id, subject, title, source, content_text, official_answer_text,
-          knowledge_tags_json, difficulty, created_at, exam_question_id, owner_user_id, is_shared
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(`practice-${item.id}`, subject, `${title} · 第 ${item.number} 题`, title, item.content, item.answer, JSON.stringify(item.tags), item.difficulty, createdAt, item.id, req.user.id);
+        INSERT INTO exam_papers (
+          id, year, region, subject, title, source_name, source_url, license_note,
+          status, created_at, owner_user_id, is_shared, import_kind
+        ) VALUES (?, ?, '网络', ?, ?, ?, ?, '自动采集后经管理员人工审核发布，保留原始来源链接。', 'published', ?, ?, 1, 'web')
+      `).run(paperId, new Date().getFullYear(), job.subject, candidate.page_title, source.hostname, job.seed_url, createdAt, reviewerId);
+      db.prepare("UPDATE discovery_crawl_jobs SET published_paper_id = ? WHERE id = ?").run(paperId, job.id);
     }
+    const questionId = randomUUID();
+    const tags = parseJson(candidate.knowledge_tags_json, []);
+    const answer = candidate.official_answer_text || "原网页未附参考答案，请先独立推导。";
     db.prepare(`
-      INSERT INTO ingestion_jobs (id, source_name, source_url, status, message, imported_count, created_at)
-      VALUES (?, ?, ?, 'completed', ?, ?, ?)
-    `).run(randomUUID(), title, sourceUrl, `网页采集完成：${normalized.length} 题已进入新发现。`, normalized.length, createdAt);
+      INSERT INTO exam_questions (
+        id, paper_id, question_number, subject, question_type, content_text,
+        official_answer_text, source, knowledge_tags_json, difficulty, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_profile', ?)
+    `).run(questionId, paperId, candidate.question_number, job.subject, candidate.question_type, candidate.content_text,
+      answer, candidate.page_title, JSON.stringify(tags), candidate.difficulty, createdAt);
+    db.prepare(`
+      INSERT INTO practice_questions (
+        id, subject, title, source, content_text, official_answer_text,
+        knowledge_tags_json, difficulty, created_at, exam_question_id, owner_user_id, is_shared
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).run(`practice-${questionId}`, job.subject, `${candidate.page_title} · 第 ${candidate.question_number} 题`,
+      candidate.page_title, candidate.content_text, answer, JSON.stringify(tags), candidate.difficulty, createdAt, questionId, reviewerId);
+    db.prepare(`
+      UPDATE discovery_candidates SET status = 'approved', reviewed_at = ?, reviewed_by = ?, published_question_id = ? WHERE id = ?
+    `).run(createdAt, reviewerId, questionId, candidate.id);
     db.exec("COMMIT");
+    return questionId;
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  recordEvent(req.user.id, "discovery_imported", { paper_id: paperId, count: normalized.length, source_url: sourceUrl });
-  res.status(201).json(ok({ paper_id: paperId, imported_count: normalized.length }));
+}
+
+function finishReviewIfComplete(jobId) {
+  const pending = db.prepare("SELECT COUNT(*) AS count FROM discovery_candidates WHERE job_id = ? AND status = 'pending'").get(jobId).count;
+  if (!pending) db.prepare("UPDATE discovery_crawl_jobs SET status = 'completed' WHERE id = ?").run(jobId);
+}
+
+discoveryRouter.post("/admin/discovery/candidates/:candidateId/approve", requireAdmin, (req, res) => {
+  const candidate = db.prepare("SELECT * FROM discovery_candidates WHERE id = ?").get(req.params.candidateId);
+  if (!candidate) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道候选题。");
+  if (candidate.status !== "pending") return fail(res, 409, "REVIEW_ALREADY_FINISHED", "这道候选题已经审核过了。");
+  const questionId = publishCandidate(candidate, req.user.id);
+  finishReviewIfComplete(candidate.job_id);
+  recordEvent(req.user.id, "discovery_imported", { job_id: candidate.job_id, question_id: questionId, source_url: candidate.source_url });
+  res.status(201).json(ok(toCrawlCandidate(db.prepare("SELECT * FROM discovery_candidates WHERE id = ?").get(candidate.id))));
+});
+
+discoveryRouter.post("/admin/discovery/candidates/:candidateId/reject", requireAdmin, (req, res) => {
+  const candidate = db.prepare("SELECT * FROM discovery_candidates WHERE id = ?").get(req.params.candidateId);
+  if (!candidate) return fail(res, 404, "RESOURCE_NOT_FOUND", "没有找到这道候选题。");
+  if (candidate.status !== "pending") return fail(res, 409, "REVIEW_ALREADY_FINISHED", "这道候选题已经审核过了。");
+  db.prepare(`
+    UPDATE discovery_candidates SET status = 'rejected', review_note = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?
+  `).run(typeof req.body.reason === "string" ? req.body.reason.trim().slice(0, 500) : null, nowIso(), req.user.id, candidate.id);
+  finishReviewIfComplete(candidate.job_id);
+  res.json(ok(toCrawlCandidate(db.prepare("SELECT * FROM discovery_candidates WHERE id = ?").get(candidate.id))));
 });

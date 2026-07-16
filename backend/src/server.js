@@ -17,6 +17,7 @@ import { AppError, fail } from "./http.js";
 import { requireAuth } from "./auth.js";
 import { authorizeUpload } from "./upload-access.js";
 import { scheduleDailyBackup } from "./backup.js";
+import { logError, requestLogger } from "./logger.js";
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.use(cors({
 }));
 app.use(helmet());
 app.use(cookieParser());
+app.use(requestLogger);
 const json1mb = express.json({ limit: "1mb" });
 const json30mb = express.json({ limit: "30mb" });
 app.use((req, res, next) => {
@@ -119,7 +121,7 @@ app.use((error, _req, res, _next) => {
   if (error.type === "entity.too.large") {
     return fail(res, 413, "PAYLOAD_TOO_LARGE", "请求体过大。");
   }
-  console.error(`[${new Date().toISOString()}] Unhandled error:`, error.message || error);
+  logError("unhandled_error", error, { path: _req.path, method: _req.method });
   return fail(res, 500, "SERVER_ERROR", "服务器暂时不可用。");
 });
 

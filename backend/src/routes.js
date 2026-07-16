@@ -29,6 +29,7 @@ import {
   buildQuestionCollection,
   ensureAiConfigured,
   evaluatePracticeAttempt,
+  evaluatePracticeAttemptStream,
   evaluatePracticeRedo,
   generateAnswer,
   generateFollowUp,
@@ -140,7 +141,7 @@ function evaluationCacheKey(practiceQuestion, answerText) {
   return { answerHash, cacheKey: `${practiceQuestion.id}:${questionVersion}:${answerHash}` };
 }
 
-async function evaluatePracticeWithCache({ userId, practiceQuestion, answerText }) {
+async function evaluatePracticeWithCache({ userId, practiceQuestion, answerText, onFeedback }) {
   const { answerHash, cacheKey } = evaluationCacheKey(practiceQuestion, answerText);
   const cached = db.prepare("SELECT evaluation_json FROM practice_evaluation_cache WHERE cache_key = ?").get(cacheKey);
   if (cached) {
@@ -148,16 +149,16 @@ async function evaluatePracticeWithCache({ userId, practiceQuestion, answerText 
     if (evaluation) {
       db.prepare("UPDATE practice_evaluation_cache SET hit_count = hit_count + 1, last_used_at = ? WHERE cache_key = ?")
         .run(nowIso(), cacheKey);
+      if (onFeedback) onFeedback(evaluation.feedback_text || "评阅已从记忆中读取。");
       return { evaluation, fromCache: true };
     }
   }
 
   ensureAiConfigured();
-  const evaluation = await withAiQuota(userId, () => evaluatePracticeAttempt({
-    practiceQuestion,
-    answerText,
-    canonicalTags: canonicalTagsForSubject(practiceQuestion.subject)
-  }));
+  const args = { practiceQuestion, answerText, canonicalTags: canonicalTagsForSubject(practiceQuestion.subject) };
+  const evaluation = await withAiQuota(userId, () => onFeedback
+    ? evaluatePracticeAttemptStream(args, onFeedback)
+    : evaluatePracticeAttempt(args));
   const createdAt = nowIso();
   db.prepare(`
     INSERT INTO practice_evaluation_cache (
@@ -1241,6 +1242,35 @@ router.post("/practice/questions/:questionId/attempt", requireAuth, asyncRoute(a
     correction: toPracticeCorrection(correction),
     previous_attempt: parentAttempt
   }));
+}));
+
+router.post("/practice/questions/:questionId/attempt/stream", requireAuth, asyncRoute(async (req, res) => {
+  const answerText = requireString(req.body.answer_text, "你的作答");
+  const questionRow = db.prepare("SELECT * FROM practice_questions WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ? OR is_shared = 1)")
+    .get(req.params.questionId, req.user.id);
+  if (!questionRow) throw new AppError(404, "RESOURCE_NOT_FOUND", "没有找到这道练习题。");
+  const evaluationQuestion = toPracticeQuestion(questionRow, { includeAnswer: true });
+
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  send("status", { stage: "evaluating", message: "正在理解你的作答…" });
+  try {
+    const result = await evaluatePracticeWithCache({
+      userId: req.user.id,
+      practiceQuestion: evaluationQuestion,
+      answerText,
+      onFeedback: (text) => send("feedback", { text })
+    });
+    send("ready", { cached: result.fromCache });
+  } catch (error) {
+    send("error", { error_code: error.errorCode || "AI_SERVICE_ERROR", message: error.message || "流式评阅失败。" });
+  } finally {
+    res.end();
+  }
 }));
 
 router.post("/practice/questions/:questionId/follow-up", requireAuth, asyncRoute(async (req, res) => {

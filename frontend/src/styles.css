@@ -459,6 +459,8 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weig
 .math-keyboard button:last-child { font-size: 13px; padding-inline: 12px; }
 .answer-preview { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 6px; background: var(--wash, #faf9f5); overflow-x: auto; }
 .answer-preview-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.streaming-feedback { display: grid; gap: 8px; margin: 12px 0; padding: 14px; border-left: 3px solid var(--green); background: var(--green-soft); line-height: 1.65; }
+.streaming-feedback > span { color: var(--green); font-size: 11px; font-weight: 800; }
 
 .score-section { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
 .score-value { font: 500 56px var(--serif); color: var(--clay); }
@@ -1446,12 +1448,37 @@ input:focus, select:focus, textarea:focus { border-color: var(--purple); box-sha
 .collector-preview strong { display: block; margin-bottom: 10px; }
 .collector-preview p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .collector-json { min-height: 300px; resize: vertical; font: 12px/1.6 var(--mono); }
+.crawler-form { display: grid; grid-template-columns: minmax(0,1fr) 130px 110px auto; gap: 12px; align-items: end; margin-top: 20px; }
+.crawler-form label, .crawl-candidate label { display: grid; gap: 7px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
+.crawler-workspace { display: grid; grid-template-columns: 230px minmax(0,1fr); gap: 18px; margin-top: 22px; border-top: 1px solid var(--line); padding-top: 18px; }
+.crawl-job-list { display: grid; gap: 8px; align-content: start; }
+.crawl-job-list button { display: grid; gap: 5px; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); text-align: left; }
+.crawl-job-list button.active { border-color: var(--green); background: var(--green-soft); }
+.crawl-job-list span, .crawl-job-list small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.crawl-review { min-width: 0; }
+.crawl-progress { display: grid; gap: 9px; margin-bottom: 16px; }
+.crawl-progress > div { display: flex; justify-content: space-between; gap: 12px; }
+.crawl-progress progress { width: 100%; accent-color: var(--green); }
+.crawl-progress p { margin: 0; color: var(--rust); font-size: 12px; }
+.crawl-candidates { display: grid; gap: 12px; }
+.crawl-candidate { display: grid; gap: 13px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.crawl-candidate.approved { border-left: 3px solid var(--green); }
+.crawl-candidate.rejected { opacity: .62; }
+.crawl-candidate-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 11px; color: var(--muted); }
+.crawl-candidate-meta a { margin-left: auto; color: var(--green); }
+.crawler-fields { display: grid; grid-template-columns: 90px minmax(0,1fr) 120px; gap: 12px; }
+.crawl-candidate textarea { min-height: 96px; resize: vertical; line-height: 1.6; }
+.crawl-review-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.crawl-review-actions .danger { color: var(--rust); border-color: color-mix(in srgb, var(--rust) 45%, var(--line)); }
 .route-loading { min-height: 45vh; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 
 @media (max-width: 980px) {
   .admin-stat-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .admin-stat-grid .stat:nth-child(3n) { border-right: 0; }
-  .admin-grid, .feedback-layout, .collector-layout { grid-template-columns: 1fr; }
+  .admin-grid, .feedback-layout, .collector-layout, .crawler-workspace { grid-template-columns: 1fr; }
+  .crawler-form { grid-template-columns: minmax(0,1fr) 1fr 1fr; }
+  .crawler-form button { grid-column: 1 / -1; }
+  .crawl-job-list { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -1468,6 +1495,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--purple); box-sha
   .main-nav button { padding-inline: 2px; font-size: 11px; }
   .collector-fields { grid-template-columns: 1fr; }
   .collector-preview, .collector-json { min-height: 230px; height: 230px; }
+  .crawler-form, .crawler-fields, .crawl-job-list { grid-template-columns: 1fr; }
+  .crawl-review-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .crawl-review-actions .primary { grid-column: 1 / -1; }
   .path-graph-canvas-wrap { height: var(--graph-mobile-height, 420px); }
   .path-graph-detail { align-items: stretch; flex-direction: column; }
 }

@@ -76,6 +76,17 @@ export const shapes = {
       recommended_action: rules.str,
       related_question_ids: rules.strArray
     })
+  },
+  webQuestionExtraction: {
+    questions: rules.arrayOf({
+      question_number: rules.str,
+      question_type: rules.str,
+      content_text: rules.str,
+      official_answer_text: rules.strOrNull,
+      knowledge_tags: rules.strArray,
+      difficulty: rules.oneOf(["easy", "medium", "hard"]),
+      confidence: rules.num
+    })
   }
   // 视觉识别（拆题/单题/拍照）不做强校验：导入流水线本身有人工校对环节兜底，
   // 强校验反而会因个别残缺题让整页识别反复重试。

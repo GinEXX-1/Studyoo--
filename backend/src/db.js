@@ -302,6 +302,59 @@ CREATE TABLE IF NOT EXISTS discovery_ratings (
 CREATE INDEX IF NOT EXISTS idx_discovery_ratings_question ON discovery_ratings(exam_question_id, rating);
 `);
 
+// 网页爬虫只把 AI 识别结果写入候选区；人工审核通过后才进入正式题库。
+db.exec(`
+CREATE TABLE IF NOT EXISTS discovery_crawl_jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  seed_url TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  max_pages INTEGER NOT NULL DEFAULT 3,
+  status TEXT NOT NULL DEFAULT 'queued',
+  pages_crawled INTEGER NOT NULL DEFAULT 0,
+  candidates_found INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  published_paper_id TEXT,
+  created_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (published_paper_id) REFERENCES exam_papers(id)
+);
+CREATE TABLE IF NOT EXISTS discovery_candidates (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  page_title TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  question_number TEXT NOT NULL,
+  question_type TEXT NOT NULL,
+  content_text TEXT NOT NULL,
+  official_answer_text TEXT,
+  knowledge_tags_json TEXT NOT NULL DEFAULT '[]',
+  difficulty TEXT NOT NULL DEFAULT 'medium',
+  confidence REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  review_note TEXT,
+  reviewed_at TEXT,
+  reviewed_by TEXT,
+  published_question_id TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(job_id, content_hash),
+  FOREIGN KEY (job_id) REFERENCES discovery_crawl_jobs(id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewed_by) REFERENCES users(id),
+  FOREIGN KEY (published_question_id) REFERENCES exam_questions(id)
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_crawl_jobs_status_time ON discovery_crawl_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_discovery_candidates_job_status ON discovery_candidates(job_id, status, created_at);
+`);
+
+// 容器若在后台爬取时重启，不能让任务永久显示“进行中”。
+db.prepare(`
+  UPDATE discovery_crawl_jobs
+  SET status = 'failed', error_message = '服务重启导致任务中断，请重新发起。', completed_at = ?
+  WHERE status IN ('queued', 'running')
+`).run(new Date().toISOString());
+
 // 重做机制：一道做错的练习题从"错"到"会"的订正状态机
 // wrong → corrected → redo_pending → redo_passed / redo_failed(回 corrected)
 // 注：《重做机制开发计划》原案复用 mistake_records，但该表外键绑定解析题（questions），

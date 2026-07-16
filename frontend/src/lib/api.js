@@ -33,6 +33,46 @@ export async function apiRequest(path, options = {}) {
   return payload.data;
 }
 
+export async function apiEventStream(path, options = {}, onEvent = () => {}) {
+  const response = await fetch(apiUrl(path), {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    credentials: "include"
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null);
+    const error = new Error(payload?.message || `流式接口不可用（HTTP ${response.status}）。`);
+    error.code = payload?.error_code;
+    throw error;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let ready = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || "";
+    for (const block of blocks) {
+      const event = block.match(/^event:\s*(.+)$/m)?.[1]?.trim() || "message";
+      const dataText = block.split(/\r?\n/).filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim()).join("\n");
+      if (!dataText) continue;
+      const data = JSON.parse(dataText);
+      if (event === "error") {
+        const error = new Error(data.message || "流式评阅失败。");
+        error.code = data.error_code;
+        throw error;
+      }
+      if (event === "ready") ready = true;
+      onEvent(event, data);
+    }
+    if (done) break;
+  }
+  if (!ready) throw new Error("流式评阅意外中断。");
+}
+
 // 埋点上报：fire-and-forget，失败静默——观测手段绝不打扰学习主流程
 export function trackEvent(eventName, payload = {}) {
   apiRequest("/events", {

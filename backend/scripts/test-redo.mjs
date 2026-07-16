@@ -34,11 +34,19 @@ const aiServer = createServer((req, res) => {
       next_action: isBad ? "回到解析入口看配方步骤。" : "三天后做一道同类题巩固。",
       knowledge_tags: ["二次函数"]
     };
+    const requestPayload = JSON.parse(body);
+    if (requestPayload.stream) {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const content = JSON.stringify(evaluation);
+      for (let index = 0; index < content.length; index += 24) {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(index, index + 24) } }] })}\n\n`);
+      }
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: {} }], usage: { total_tokens: 321 } })}\n\n`);
+      res.end("data: [DONE]\n\n");
+      return;
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify(evaluation) } }],
-      usage: { total_tokens: 321 }
-    }));
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(evaluation) } }], usage: { total_tokens: 321 } }));
   });
 });
 aiServer.listen(Number(aiPort));
@@ -103,12 +111,20 @@ try {
   const practiceId = `practice-${questionId}`;
 
   // 1) 首答做错 → 状态机进入 wrong
+  const streamed = await fetch(`${base}/practice/questions/${practiceId}/attempt/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ answer_text: "最小值是 3。这是错的" })
+  });
+  const streamedBody = await streamed.text();
+  assert(streamed.status === 200 && streamedBody.includes("event: feedback") && streamedBody.includes("event: ready"), "首次评阅通过 SSE 增量返回反馈并写入缓存");
   const first = await request(`/practice/questions/${practiceId}/attempt`, {
     method: "POST",
     token,
     body: JSON.stringify({ answer_text: "最小值是 3。这是错的" })
   });
   assert(first.status === 200 && first.payload.data.attempt.is_correct === false, "首答未通过，正常评阅");
+  assert(first.payload.data.cached === true && first.payload.data.attempt.from_cache === true, "流式评阅后正式提交直接复用同一份 AI 结果");
   assert(first.payload.data.attempt.attempt_round === 1 && first.payload.data.attempt.is_redo === false, "首答 round=1 且非重做");
   assert(first.payload.data.correction?.correction_status === "wrong", "首答错误后 correction_status=wrong");
   const firstAttemptId = first.payload.data.attempt.id;

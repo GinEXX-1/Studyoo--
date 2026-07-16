@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 
 const port = "3132";
 const baseUrl = `http://127.0.0.1:${port}/api/v1`;
@@ -117,7 +119,7 @@ try {
   const mine = await request("/feedback/mine", { token: studentToken });
   assert(mine.payload.data.items[0].admin_note.includes("知识图谱"), "学生账户页可看到处理回复");
 
-  const webImport = await request("/admin/discovery/import", {
+  const retiredDirectImport = await request("/admin/discovery/import", {
     method: "POST",
     token: adminToken,
     body: JSON.stringify({
@@ -130,29 +132,46 @@ try {
       ]
     })
   });
-  assert(webImport.status === 201 && webImport.payload.data.imported_count === 2, "Admin/Codex 可结构化导入网页题目");
-  const dashboardAfterImport = await request("/admin/dashboard", { token: adminToken });
-  assert(dashboardAfterImport.payload.data.summary.imports_today >= 1, "网页采集计入今日导入指标");
-
-  const discover = await request("/discover?source=web&subject=数学", { token: studentToken });
-  assert(discover.payload.data.items.length === 2, "网页采集题实时进入新发现");
-  assert(discover.payload.data.items.every((item) => item.source_type === "web" && item.contributor === null), "网页采集与同学共享来源正确区分");
-  const communityAfterWebImport = await request("/discover?source=community&subject=数学", { token: studentToken });
-  assert(communityAfterWebImport.payload.data.items.length === 0, "网页采集题不混入同学共享筛选");
-  const discoveredQuestion = discover.payload.data.items[0];
-  const rating = await request(`/discover/${discoveredQuestion.id}/rating`, {
-    method: "POST", token: studentToken, body: JSON.stringify({ rating: 5 })
-  });
-  assert(rating.payload.data.average_rating === 5, "学生可评价新发现题目");
-  const saved = await request(`/discover/${discoveredQuestion.id}/save`, { method: "POST", token: studentToken });
-  assert(saved.status === 200 && saved.payload.data.collection_id, "学生可将单题加入个人题库");
-  const collection = await request(`/collections/${saved.payload.data.collection_id}`, { token: studentToken });
-  assert(collection.payload.data.questions.length === 1, "收藏题目出现在个人新发现题库");
-
-  const blockedFetch = await request("/admin/discovery/fetch-preview", {
+  assert(retiredDirectImport.status === 404, "旧直发接口已移除，采集题不能绕过人工审核");
+  const retiredPreview = await request("/admin/discovery/fetch-preview", {
     method: "POST", token: adminToken, body: JSON.stringify({ url: "https://example.com/questions" })
   });
-  assert(blockedFetch.status === 403, "网页抓取默认关闭并受域名白名单保护");
+  assert(retiredPreview.status === 404, "旧网页预览接口已移除，统一由爬虫任务采集");
+  const deniedCrawlJobs = await request("/admin/discovery/crawl-jobs", { token: studentToken });
+  assert(deniedCrawlJobs.status === 403, "普通学生不能查看爬虫任务和候选题");
+  const crawlJobs = await request("/admin/discovery/crawl-jobs", { token: adminToken });
+  assert(crawlJobs.status === 200 && Array.isArray(crawlJobs.payload.data.items), "管理员可读取爬虫任务队列");
+  const blockedCrawl = await request("/admin/discovery/crawl", {
+    method: "POST", token: adminToken, body: JSON.stringify({ url: "https://example.com/questions", subject: "数学", max_pages: 3 })
+  });
+  assert(blockedCrawl.status === 403 && blockedCrawl.payload.error_code === "SOURCE_NOT_ALLOWED", "爬虫启动前校验来源域名白名单");
+
+  const crawlJobId = randomUUID();
+  const candidateId = randomUUID();
+  const createdAt = new Date().toISOString();
+  const testDb = new DatabaseSync(databasePath);
+  testDb.prepare(`
+    INSERT INTO discovery_crawl_jobs (
+      id, user_id, seed_url, subject, max_pages, status, pages_crawled, candidates_found, created_at, completed_at
+    ) VALUES (?, ?, ?, '数学', 1, 'review', 1, 1, ?, ?)
+  `).run(crawlJobId, admin.payload.data.user.id, "https://example.com/questions", createdAt, createdAt);
+  testDb.prepare(`
+    INSERT INTO discovery_candidates (
+      id, job_id, source_url, page_title, content_hash, question_number, question_type,
+      content_text, official_answer_text, knowledge_tags_json, difficulty, confidence, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, '1', '解答题', ?, ?, '["函数"]', 'easy', 0.95, 'pending', ?)
+  `).run(candidateId, crawlJobId, "https://example.com/questions/1", "人工审核样本",
+    `manual-review-${candidateId}`, "已知函数 f(x)=x^2，求 f(2)。", "4", createdAt);
+  testDb.close();
+
+  const beforeApproval = await request("/discover?source=web&subject=数学", { token: studentToken });
+  assert(beforeApproval.payload.data.items.length === 0, "待审核候选题不会出现在学生题库");
+  const approved = await request(`/admin/discovery/candidates/${candidateId}/approve`, {
+    method: "POST", token: adminToken
+  });
+  assert(approved.status === 201 && approved.payload.data.status === "approved", "只有管理员人工通过才能发布候选题");
+  const afterApproval = await request("/discover?source=web&subject=数学", { token: studentToken });
+  assert(afterApproval.payload.data.items.length === 1, "人工审核通过后题目才进入学生题库");
 
   const graph = await request("/recommend/graph?subject=物理", { token: studentToken });
   assert(graph.status === 200 && graph.payload.data.nodes.length >= 5, "学习路径返回结构化知识节点");
