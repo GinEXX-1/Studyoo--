@@ -4,7 +4,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "agent/**"]
+    branches: [main, "agent/**", "claude/**"]
   pull_request:
 
 jobs:
@@ -31,5 +31,7 @@ jobs:
         run: npm run test:redo --workspace backend
       - name: 用户画像、反馈与 Admin 权限测试
         run: npm run test:admin --workspace backend
+      - name: 网页爬虫解析与白名单测试
+        run: npm run test:crawler --workspace backend
       - name: 前端构建
         run: npm run build --workspace frontend

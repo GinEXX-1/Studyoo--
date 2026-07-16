@@ -117,6 +117,7 @@ export default function LibraryPage() {
         <div><p className="eyebrow">Question Bank</p><h1>题库</h1><p>像整理播放列表一样，建立真正想做完的试卷。</p></div>
         <div className="library-mode-tabs">
           <button className={mode === "library" ? "active" : ""} onClick={() => setMode("library")}>我的题库</button>
+          <button onClick={() => navigate("/discover")}>共享题库</button>
           <button className={mode === "pdf" ? "active" : ""} onClick={() => navigate("/import")}>导入 PDF</button>
           <button className={mode === "photo" ? "active" : ""} onClick={() => setMode("photo")}>拍照导入</button>
           <button className={mode === "ai" ? "active" : ""} onClick={() => setMode("ai")}>AI 组卷</button>

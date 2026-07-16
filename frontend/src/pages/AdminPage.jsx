@@ -21,26 +21,18 @@ const eventLabels = {
 
 const feedbackStatuses = { open: "待处理", reviewing: "处理中", resolved: "已解决" };
 const subjects = ["语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治"];
-const questionTemplate = JSON.stringify([
-  {
-    question_number: "1",
-    question_type: "单选题",
-    content_text: "",
-    official_answer_text: "",
-    knowledge_tags: [],
-    difficulty: "medium"
-  }
-], null, 2);
+const crawlStatusLabels = { queued: "排队中", running: "正在爬取", review: "等待审核", completed: "审核完成", failed: "失败" };
 
 export default function AdminPage() {
   const [dashboard, setDashboard] = useState(null);
   const [feedback, setFeedback] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [preview, setPreview] = useState(null);
-  const [importTitle, setImportTitle] = useState("");
-  const [importSubject, setImportSubject] = useState("数学");
-  const [questionsJson, setQuestionsJson] = useState(questionTemplate);
+  const [crawlUrl, setCrawlUrl] = useState("");
+  const [crawlSubject, setCrawlSubject] = useState("数学");
+  const [maxPages, setMaxPages] = useState("3");
+  const [crawlJobs, setCrawlJobs] = useState([]);
+  const [selectedJobId, setSelectedJobId] = useState("");
+  const [crawlDetail, setCrawlDetail] = useState(null);
   const [collectorBusy, setCollectorBusy] = useState("");
 
   async function loadFeedback() {
@@ -48,11 +40,24 @@ export default function AdminPage() {
     setFeedback(data.items || []);
   }
 
+  async function loadCrawlJobs(preferredId) {
+    const data = await apiRequest("/admin/discovery/crawl-jobs");
+    const items = data.items || [];
+    setCrawlJobs(items);
+    const nextId = preferredId || selectedJobId || items[0]?.id;
+    if (nextId) {
+      setSelectedJobId(nextId);
+      const detail = await apiRequest(`/admin/discovery/crawl-jobs/${nextId}`);
+      setCrawlDetail(detail);
+    }
+  }
+
   useEffect(() => {
     let source;
     let fallback;
     apiRequest("/admin/dashboard").then(setDashboard).catch((error) => toast.error(error.message));
     loadFeedback().catch((error) => toast.error(error.message));
+    loadCrawlJobs().catch((error) => toast.error(error.message));
     try {
       source = new EventSource(apiUrl("/admin/stream"), { withCredentials: true });
       source.addEventListener("dashboard", (event) => {
@@ -73,6 +78,12 @@ export default function AdminPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!crawlJobs.some((job) => ["queued", "running"].includes(job.status))) return undefined;
+    const timer = setInterval(() => loadCrawlJobs(selectedJobId).catch(() => {}), 2500);
+    return () => clearInterval(timer);
+  }, [crawlJobs, selectedJobId]);
+
   async function updateFeedback(item, status) {
     try {
       await apiRequest(`/admin/feedback/${item.id}`, {
@@ -86,17 +97,17 @@ export default function AdminPage() {
     }
   }
 
-  async function fetchPreview(event) {
+  async function startCrawl(event) {
     event.preventDefault();
-    setCollectorBusy("fetch");
+    setCollectorBusy("crawl");
     try {
-      const data = await apiRequest("/admin/discovery/fetch-preview", {
+      const data = await apiRequest("/admin/discovery/crawl", {
         method: "POST",
-        body: JSON.stringify({ url: sourceUrl })
+        body: JSON.stringify({ url: crawlUrl, subject: crawlSubject, max_pages: Number(maxPages) })
       });
-      setPreview(data);
-      setImportTitle((current) => current || data.title || "");
-      toast.success("网页正文已抓取");
+      await loadCrawlJobs(data.job.id);
+      setCrawlUrl("");
+      toast.success("爬取任务已启动");
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -104,35 +115,53 @@ export default function AdminPage() {
     }
   }
 
-  async function importQuestions(event) {
-    event.preventDefault();
-    let questions;
+  async function selectCrawlJob(jobId) {
+    setSelectedJobId(jobId);
     try {
-      questions = JSON.parse(questionsJson);
-    } catch {
-      toast.error("题目 JSON 格式不正确");
-      return;
+      setCrawlDetail(await apiRequest(`/admin/discovery/crawl-jobs/${jobId}`));
+    } catch (error) {
+      toast.error(error.message);
     }
-    if (!Array.isArray(questions) || !questions.length) {
-      toast.error("至少需要一条题目数据");
-      return;
-    }
-    setCollectorBusy("import");
+  }
+
+  function editCandidate(candidateId, patch) {
+    setCrawlDetail((current) => ({
+      ...current,
+      candidates: current.candidates.map((item) => item.id === candidateId ? { ...item, ...patch } : item)
+    }));
+  }
+
+  async function saveCandidate(candidate) {
+    setCollectorBusy(candidate.id);
     try {
-      const data = await apiRequest("/admin/discovery/import", {
-        method: "POST",
-        body: JSON.stringify({
-          source_url: preview?.url || sourceUrl,
-          title: importTitle,
-          subject: importSubject,
-          questions
-        })
+      const updated = await apiRequest(`/admin/discovery/candidates/${candidate.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(candidate)
       });
-      toast.success(`${data.imported_count} 道题已进入新发现`);
-      setQuestionsJson(questionTemplate);
-      setPreview(null);
-      setSourceUrl("");
-      setImportTitle("");
+      editCandidate(candidate.id, updated);
+      toast.success("候选题已保存");
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setCollectorBusy("");
+    }
+  }
+
+  async function reviewCandidate(candidate, action) {
+    setCollectorBusy(candidate.id);
+    try {
+      if (action === "approve") {
+        await apiRequest(`/admin/discovery/candidates/${candidate.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(candidate)
+        });
+      }
+      await apiRequest(`/admin/discovery/candidates/${candidate.id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify(action === "reject" ? { reason: candidate.review_note } : {})
+      });
+      await loadCrawlJobs(selectedJobId);
+      toast.success(action === "approve" ? "已审核发布到新发现" : "已拒绝候选题");
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -159,23 +188,32 @@ export default function AdminPage() {
         <div className="admin-panel"><div className="section-heading"><div><p className="eyebrow">Event Stream</p><h2>最近操作</h2></div></div><div className="event-stream">{dashboard?.recent_events?.slice(0, 18).map((item) => <div key={item.id}><i /><span><strong>{item.nickname}</strong>{eventLabels[item.event_name] || item.event_name}</span><time>{new Date(item.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div>)}</div></div>
       </section>
       <section className="admin-panel collector-panel">
-        <div className="section-heading"><div><p className="eyebrow">Content Collector</p><h2>网页采集</h2></div><span>{preview?.fetched_at ? `抓取于 ${new Date(preview.fetched_at).toLocaleTimeString("zh-CN")}` : "HTTPS 白名单"}</span></div>
-        <div className="collector-layout">
-          <form className="collector-source" onSubmit={fetchPreview}>
-            <label>来源网页<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://..." required /></label>
-            <button className="ghost" disabled={Boolean(collectorBusy)}>{collectorBusy === "fetch" ? "正在抓取..." : "抓取正文"}</button>
-            <div className="collector-preview" aria-live="polite">
-              {preview ? <><strong>{preview.title}</strong><p>{preview.text}</p></> : <p className="empty-copy">等待抓取。</p>}
-            </div>
-          </form>
-          <form className="collector-import" onSubmit={importQuestions}>
-            <div className="collector-fields">
-              <label>题集标题<input value={importTitle} onChange={(event) => setImportTitle(event.target.value)} required /></label>
-              <label>学科<select value={importSubject} onChange={(event) => setImportSubject(event.target.value)}>{subjects.map((subject) => <option key={subject}>{subject}</option>)}</select></label>
-            </div>
-            <label>结构化题目 JSON<textarea className="collector-json" value={questionsJson} onChange={(event) => setQuestionsJson(event.target.value)} spellCheck="false" required /></label>
-            <button className="primary" disabled={Boolean(collectorBusy) || !sourceUrl}>{collectorBusy === "import" ? "正在导入..." : "导入新发现"}</button>
-          </form>
+        <div className="section-heading"><div><p className="eyebrow">Question Crawler</p><h2>自动采集与人工审核</h2></div><span>白名单 · 同域 · 最多 5 页</span></div>
+        <form className="crawler-form" onSubmit={startCrawl}>
+          <label>起始网页<input type="url" value={crawlUrl} onChange={(event) => setCrawlUrl(event.target.value)} placeholder="https://..." required /></label>
+          <label>学科<select value={crawlSubject} onChange={(event) => setCrawlSubject(event.target.value)}>{subjects.map((subject) => <option key={subject}>{subject}</option>)}</select></label>
+          <label>页面数<select value={maxPages} onChange={(event) => setMaxPages(event.target.value)}><option value="1">1 页</option><option value="3">3 页</option><option value="5">5 页</option></select></label>
+          <button className="primary" disabled={Boolean(collectorBusy)}>{collectorBusy === "crawl" ? "正在创建..." : "开始爬取"}</button>
+        </form>
+        <div className="crawler-workspace">
+          <aside className="crawl-job-list">
+            {crawlJobs.length ? crawlJobs.map((job) => <button key={job.id} className={selectedJobId === job.id ? "active" : ""} onClick={() => selectCrawlJob(job.id)}><strong>{job.subject} · {crawlStatusLabels[job.status] || job.status}</strong><span>{job.pages_crawled}/{job.max_pages} 页 · {job.candidate_counts.pending} 待审</span><small>{new URL(job.seed_url).hostname}</small></button>) : <p className="empty-copy">还没有爬取任务。</p>}
+          </aside>
+          <div className="crawl-review">
+            {crawlDetail ? <>
+              <div className="crawl-progress"><div><strong>{crawlStatusLabels[crawlDetail.job.status] || crawlDetail.job.status}</strong><span>{crawlDetail.job.pages_crawled}/{crawlDetail.job.max_pages} 页 · 找到 {crawlDetail.job.candidates_found} 道</span></div><progress value={crawlDetail.job.pages_crawled} max={crawlDetail.job.max_pages} />{crawlDetail.job.error_message && <p>{crawlDetail.job.error_message}</p>}</div>
+              <div className="crawl-candidates">
+                {crawlDetail.candidates.length ? crawlDetail.candidates.map((candidate) => <article key={candidate.id} className={`crawl-candidate ${candidate.status}`}>
+                  <div className="crawl-candidate-meta"><strong>第 {candidate.question_number} 题</strong><span>{Math.round(candidate.confidence * 100)}% 置信度</span><span>{candidate.status === "pending" ? "待审核" : candidate.status === "approved" ? "已发布" : "已拒绝"}</span><a href={candidate.source_url} target="_blank" rel="noreferrer">查看来源</a></div>
+                  <div className="crawler-fields"><label>题号<input disabled={candidate.status !== "pending"} value={candidate.question_number} onChange={(event) => editCandidate(candidate.id, { question_number: event.target.value })} /></label><label>题型<input disabled={candidate.status !== "pending"} value={candidate.question_type} onChange={(event) => editCandidate(candidate.id, { question_type: event.target.value })} /></label><label>难度<select disabled={candidate.status !== "pending"} value={candidate.difficulty} onChange={(event) => editCandidate(candidate.id, { difficulty: event.target.value })}><option value="easy">简单</option><option value="medium">中等</option><option value="hard">困难</option></select></label></div>
+                  <label>题目内容<textarea disabled={candidate.status !== "pending"} value={candidate.content_text} onChange={(event) => editCandidate(candidate.id, { content_text: event.target.value })} /></label>
+                  <label>参考答案<textarea disabled={candidate.status !== "pending"} value={candidate.official_answer_text} onChange={(event) => editCandidate(candidate.id, { official_answer_text: event.target.value })} /></label>
+                  <label>知识点<input disabled={candidate.status !== "pending"} value={candidate.knowledge_tags.join("、")} onChange={(event) => editCandidate(candidate.id, { knowledge_tags: event.target.value.split(/[、,，]/).map((item) => item.trim()).filter(Boolean) })} /></label>
+                  {candidate.status === "pending" && <div className="crawl-review-actions"><button className="ghost" disabled={collectorBusy === candidate.id} onClick={() => saveCandidate(candidate)}>保存修改</button><button className="ghost danger" disabled={collectorBusy === candidate.id} onClick={() => reviewCandidate(candidate, "reject")}>拒绝</button><button className="primary" disabled={collectorBusy === candidate.id} onClick={() => reviewCandidate(candidate, "approve")}>通过并发布</button></div>}
+                </article>) : <p className="empty-copy">{["queued", "running"].includes(crawlDetail.job.status) ? "正在抓取并识别题目..." : "这个任务没有识别出候选题。"}</p>}
+              </div>
+            </> : <p className="empty-copy">选择一个任务查看候选题。</p>}
+          </div>
         </div>
       </section>
       <section className="admin-panel"><div className="section-heading"><div><p className="eyebrow">Feedback Inbox</p><h2>反馈收件箱</h2></div><span>{feedback.length} 条</span></div><div className="admin-feedback-list">{feedback.length ? feedback.map((item) => <article key={item.id}><div className="admin-feedback-meta"><strong>{item.user?.nickname}</strong><span>{item.user?.grade}</span><span>v{item.app_version}</span><time>{new Date(item.created_at).toLocaleString("zh-CN")}</time></div><p>{item.message}</p><textarea rows="2" value={item.admin_note || ""} onChange={(event) => setFeedback((items) => items.map((entry) => entry.id === item.id ? { ...entry, admin_note: event.target.value } : entry))} placeholder="给学生的处理回复（选填）" /><div className="admin-feedback-actions"><span className={`feedback-status ${item.status}`}>{feedbackStatuses[item.status]}</span><button className="ghost" onClick={() => updateFeedback(item, "reviewing")}>处理中</button><button className="primary" onClick={() => updateFeedback(item, "resolved")}>标记解决</button></div></article>) : <p className="empty-copy">暂无反馈。</p>}</div></section>

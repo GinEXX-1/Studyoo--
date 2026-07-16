@@ -28,7 +28,6 @@
   ],
   "shortcuts": [
     { "name": "今日计划", "short_name": "今日", "url": "/today", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] },
-    { "name": "我的题库", "short_name": "题库", "url": "/library", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] },
-    { "name": "新发现", "short_name": "发现", "url": "/discover", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] }
+    { "name": "我的题库", "short_name": "题库", "url": "/library", "icons": [{ "src": "/icons/studyoo-192.png", "sizes": "192x192" }] }
   ]
 }

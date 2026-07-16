@@ -6,6 +6,7 @@
     "dev": "node --no-warnings src/server.js",
     "start": "node --no-warnings src/server.js",
     "check:ai": "node --no-warnings scripts/check-ai.js",
+    "check:stream": "node --no-warnings scripts/check-stream-ai.mjs",
     "smoke:minimal": "node --no-warnings scripts/smoke-minimal.js",
     "test:ownership": "rm -f /tmp/studyoo-ownership-test.db && node --no-warnings scripts/test-ownership.mjs",
     "test:import-editing": "rm -f /tmp/studyoo-import-editing-test.db && node --no-warnings scripts/test-import-editing.mjs",
@@ -14,6 +15,7 @@
     "test:guardrails": "rm -f /tmp/studyoo-guardrails-test.db && node --no-warnings scripts/test-guardrails.mjs",
     "test:redo": "rm -f /tmp/studyoo-redo-test.db && node --no-warnings scripts/test-redo.mjs",
     "test:admin": "rm -f /tmp/studyoo-admin-onboarding-test.db && node --no-warnings scripts/test-admin-onboarding.mjs",
+    "test:crawler": "rm -f /tmp/studyoo-web-crawler-test.db && node --no-warnings scripts/test-web-crawler.mjs",
     "backup:db": "node --no-warnings scripts/backup-db.mjs",
     "report:funnel": "node --no-warnings scripts/funnel-report.mjs",
     "admin:reset-password": "node --no-warnings scripts/reset-password.mjs"

@@ -41,7 +41,6 @@ function AppHeader({ user }) {
         <button className={currentPage === "" || currentPage === "home" ? "active" : ""} onClick={() => navigate("/")}>工作台</button>
         <button className={currentPage === "today" ? "active" : ""} onClick={() => navigate("/today")}>今日计划</button>
         <button className={currentPage === "library" ? "active" : ""} onClick={() => navigate("/library")}>题库</button>
-        <button className={currentPage === "discover" ? "active" : ""} onClick={() => navigate("/discover")}>新发现</button>
         <button className={currentPage === "parser" ? "active" : ""} onClick={() => navigate("/parser")}>解析</button>
         {user.is_admin && <button className={currentPage === "admin" ? "active" : ""} onClick={() => navigate("/admin")}>数据台</button>}
       </nav>
